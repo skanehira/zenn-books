@@ -1,0 +1,11 @@
+title: "RustでWasm Runtimeを実装しよう"
+summary: "Rustで小さなWasm Runtimeを実装して、Wasmがどのように動作しているのかを理解する本です"
+topics: ["wasm", "rust"] # トピック（5つまで）
+published: false # falseだと下書き
+price: 0 # 有料の場合200〜5000
+chapters:
+  - 01_intro
+  - 02_about_wasm
+  - 03_intro_wasm
+  - 04_wasm_binary_structure
+  - 05_decode_wasm_binary
