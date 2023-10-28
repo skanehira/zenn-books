@@ -8,4 +8,5 @@ chapters:
   - 02_about_wasm
   - 03_intro_wasm
   - 04_wasm_binary_structure
-  - 05_decode_wasm_binary
+  - 05_how_decode_wasm_binary
+  - 06_decode_function
