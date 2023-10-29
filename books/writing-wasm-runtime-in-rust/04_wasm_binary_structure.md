@@ -204,15 +204,14 @@ Wasmバイナリは先頭に8バイトのプリアンブル、それに続いて
 ```:リスト5
 ; section "Function" (3)
 0000017: 03              ; section code
-0000018: 00              ; section size (guess)
+0000018: 04              ; section size
 0000019: 03              ; num functions
 000001a: 00              ; function 0 signature index
 000001b: 01              ; function 1 signature index
 000001c: 00              ; function 2 signature index
-0000018: 04              ; FIXUP section size
 ```
 
-`function x signature index`の値が関数シグネチャへのインデックス情報（0ベース）となっている。
+`function x signature index`の値が関数シグネチャへのインデックス情報（0-based）となっている。
 たとえば`function 2`は`Type Section`の`0`のシグネチャをもつということになる。
 
 少し分かりづらいので、関連性を図1にすると次のようになる。

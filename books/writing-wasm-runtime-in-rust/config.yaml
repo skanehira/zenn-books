@@ -10,3 +10,4 @@ chapters:
   - 04_wasm_binary_structure
   - 05_how_decode_wasm_binary
   - 06_decode_function
+  - 07_decode_function_param_result

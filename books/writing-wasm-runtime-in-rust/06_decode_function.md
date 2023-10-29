@@ -348,8 +348,8 @@ impl From<u8> for ValueType {
  
 ```
 
-`decode_type_section()`は実際に`Type Sectio`のデコード処理をしている関数だが、今回は引数も戻り値もない最もシンプルな関数なのでひとまず何もしなくても問題ない。
-引数と戻り値のデコードは別途実装する。
+`decode_type_section()`は実際に`Type Sectio`のデコード処理をしている関数だが、少し複雑になってくるので、ひとまず固定のデータを返すようにする
+引数と戻り値のデコードと合わせて別途実装する。
 
 ```diff:src/binary/module.rs
 @@ -77,6 +77,14 @@ fn decode_section_header(input: &[u8]) -> IResult<&[u8], (SectionCode, u32)> {
@@ -357,7 +357,7 @@ impl From<u8> for ValueType {
  }
  
 +fn decode_type_section(_input: &[u8]) -> IResult<&[u8], Vec<FuncType>> {
-+    let func_types = vec![];
++    let func_types = vec![FuncType::default()];
 +
 +    // TODO: 引数と戻り値のデコード
 +
@@ -370,5 +370,275 @@ impl From<u8> for ValueType {
 ```
 
 ### `Function Section`のデコード
+`Function Section`は関数本体の型情報(`Type Section`)を紐付けるための領域であると[Wasmバイナリの構造の章](/books/writing-wasm-runtime-in-rust/04_wasm_binary_structure%252Emd)で説明をした。
+
+`Function Section`のバイナリ構造の部分だけ抜き出すと次のとおり。
+
+```
+; section "Function" (3)
+000000e: 03               ; section code
+000000f: 02               ; section size
+0000010: 01               ; num functions
+0000011: 00               ; function 0 signature index
+```
+
+これをデコードしていくので、まずは`Module`に`function_section`を追加する。
+
+```diff:src/binary/module.rs
+@@ -13,6 +13,7 @@ pub struct Module {
+     pub magic: String,
+     pub version: u32,
+     pub type_section: Option<Vec<FuncType>>,
++    pub function_section: Option<Vec<u32>>,
+ }
+ 
+ impl Default for Module {
+@@ -21,6 +22,7 @@ impl Default for Module {
+             magic: "\0asm".to_string(),
+             version: 1,
+             type_section: None,
++            function_section: None,
+         }
+     }
+ }
+@@ -54,6 +56,10 @@ impl Module {
+                             let (_, types) = decode_type_section(section_contents)?;
+                             module.type_section = Some(types);
+                         }
++                        SectionCode::Function => {
++                            let (_, func_idx_list) = decode_function_section(section_contents)?;
++                            module.function_section = Some(func_idx_list);
++                        }
+                         _ => todo!(),
+                     };
+```
+
+`Function Section`は単に`Type Section`と`Code Section`を紐付けるためのインデックス情報を持っているだけなので、Rustでは`Vec<u32>`で表現する。
+
+続けて、`decode_function_section()`を次のように実装する。
+
+```diff:src/binary/module.rs
+@@ -91,6 +91,19 @@ fn decode_type_section(_input: &[u8]) -> IResult<&[u8], Vec<FuncType>> {
+     Ok((&[], func_types))
+ }
+ 
++fn decode_function_section(input: &[u8]) -> IResult<&[u8], Vec<u32>> {
++    let mut func_idx_list = vec![];
++    let (mut input, count) = leb128_u32(input)?; // ①
++
++    for _ in 0..count {
++        let (rest, idx) = leb128_u32(input)?;
++        func_idx_list.push(idx);
++        input = rest;
++    }
++
++    Ok((&[], func_idx_list))
++}
++
+ #[cfg(test)]
+ mod tests {
+     use crate::binary::module::Module;
+```
+
+`decode_type_section()`が呼ばれる時点の`input`は次のようになっている。
+
+```
+0000010: 01               ; num functions
+0000011: 00               ; function 0 signature index
+```
+
+`num functions`は関数の個数を表していて、この数だけインデックスを読み取る処理をしていく。
 
 ### `Code Section`のデコード
+`Code Section`は関数の情報が保存されている領域となっている。
+関数の情報は次の2つから構成されている。
+
+- ローカル変数の個数と型情報
+- 命令列
+
+これをRustで表現すると、次のようになる。
+
+```rust
+// 関数の定義
+pub struct Function {
+    pub locals: Vec<FunctionLocal>,
+    pub code: Vec<Instruction>,
+}
+
+// ローオカル変数の個数と型情報の定義
+pub struct FunctionLocal {
+    pub type_count: u32,
+    pub value_type: ValueType,
+}
+
+// 命令の定義
+pub enum Instruction {
+    LocalGet(u32),
+    End,
+    ...
+}
+```
+
+早速これらを実装していこう。まず`src/binary/instruction.rs`ファイルを作成してそこに命令を定義していく。
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Instruction {
+    End,
+}
+```
+
+```diff:src/binary.rs
++pub mod instruction;
+ pub mod module;
+ pub mod section;
+ pub mod types;
+```
+
+続けて、`FunctionLocal`を定義していく。
+
+```diff:src/binary/types.rs
+@@ -19,3 +19,9 @@ impl From<u8> for ValueType {
+         }
+     }
+ }
++
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct FunctionLocal {
++    pub type_count: u32,
++    pub value_type: ValueType,
++}
+```
+
+続けて、`Function`を定義していく。
+
+```diff:src/binary/section.rs
++use super::{instruction::Instruction, types::FunctionLocal};
+ use num_derive::FromPrimitive;
+ 
+ #[derive(Debug, PartialEq, Eq, FromPrimitive)]
+@@ -15,3 +16,9 @@ pub enum SectionCode {
+     Code = 0x0a,
+     Data = 0x0b,
+ }
++
++#[derive(Default, Debug, Clone, PartialEq, Eq)]
++pub struct Function {
++    pub locals: Vec<FunctionLocal>,
++    pub code: Vec<Instruction>,
++}
+```
+
+続けてデコード処理を実装していきたいが、少し複雑になってくるので現時点ではまずテストを通せる固定のデータ構造を返すようにする。
+デコード実装は後に実装していく。
+
+```diff:src/binary/module.rs
+-use super::{section::SectionCode, types::FuncType};
++use super::{
++    instruction::Instruction,
++    section::{Function, SectionCode},
++    types::FuncType,
++};
+ use nom::{
+     bytes::complete::{tag, take},
+     number::complete::{le_u32, le_u8},
+@@ -14,6 +18,7 @@ pub struct Module {
+     pub version: u32,
+     pub type_section: Option<Vec<FuncType>>,
+     pub function_section: Option<Vec<u32>>,
++    pub code_section: Option<Vec<Function>>,
+ }
+ 
+ impl Default for Module {
+@@ -23,6 +28,7 @@ impl Default for Module {
+             version: 1,
+             type_section: None,
+             function_section: None,
++            code_section: None,
+         }
+     }
+ }
+@@ -60,6 +66,10 @@ impl Module {
+                             let (_, func_idx_list) = decode_function_section(section_contents)?;
+                             module.function_section = Some(func_idx_list);
+                         }
++                        SectionCode::Code => {
++                            let (_, funcs) = decode_code_section(section_contents)?;
++                            module.code_section = Some(funcs);
++                        }
+                         _ => todo!(),
+                     };
+ 
+@@ -104,6 +114,16 @@ fn decode_function_section(input: &[u8]) -> IResult<&[u8], Vec<u32>> {
+     Ok((&[], func_idx_list))
+ }
+ 
++fn decode_code_section(_input: &[u8]) -> IResult<&[u8], Vec<Function>> {
++    // TODO: ローカル変数と命令のデコード
++    let functions = vec![Function {
++        locals: vec![],
++        code: vec![Instruction::End],
++    }];
++
++    Ok((&[], functions))
++}
++
+ #[cfg(test)]
+ mod tests {
+     use crate::binary::module::Module;
+```
+
+最後にテストを実装して通ることを確認する。
+とってもテストを通すように実装を合わせているだけなので意味は薄いが、次章でちゃんとデコード処理を実装してテスト通すようにしていく。
+
+```diff:src/binary/module.rs
+@@ -126,7 +126,9 @@ fn decode_code_section(_input: &[u8]) -> IResult<&[u8], Vec<Function>> {
+ 
+ #[cfg(test)]
+ mod tests {
+-    use crate::binary::module::Module;
++    use crate::binary::{
++        instruction::Instruction, module::Module, section::Function, types::FuncType,
++    };
+     use anyhow::Result;
+ 
+     #[test]
+@@ -136,4 +138,23 @@ mod tests {
+         assert_eq!(module, Module::default());
+         Ok(())
+     }
++
++    #[test]
++    fn decode_simplest_func() -> Result<()> {
++        let wasm = wat::parse_str("(module (func))")?;
++        let module = Module::new(&wasm)?;
++        assert_eq!(
++            module,
++            Module {
++                type_section: Some(vec![FuncType::default()]),
++                function_section: Some(vec![0]),
++                code_section: Some(vec![Function {
++                    locals: vec![],
++                    code: vec![Instruction::End],
++                }]),
++                ..Default::default()
++            }
++        );
++        Ok(())
++    }
+ }
+```
+
+テストを実行すると通っていることが分かる。
+
+```sh
+running 2 tests
+test binary::module::tests::decode_simplest_module ... ok
+test binary::module::tests::decode_simplest_func ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+## まとめ
+本章では、一部TODOとして残っているものはあるが、関数デコードの実装を解説した。
+次章は関数の引数、戻り値と合わせてTODOの部分の実装について解説していく。
