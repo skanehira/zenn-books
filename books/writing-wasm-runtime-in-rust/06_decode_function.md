@@ -34,7 +34,7 @@ title: "関数のデコード実装"
 0000013: 04               ; section size
 0000014: 01               ; num functions
 ; function body 0
-0000015: 02               ; func body size (guess)
+0000015: 02               ; func body size
 0000016: 00               ; local decl count
 0000017: 0b               ; end
 ```
