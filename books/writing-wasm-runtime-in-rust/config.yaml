@@ -1,4 +1,4 @@
-title: "RustでWasm Runtimeを実装しよう"
+title: "RustでWasm Runtimeを実装する"
 summary: |
   Rustで"Hello World"を出力できる小さなWasm Runtimeを実装して、Wasmがどのように動作しているのかを理解する本です。
   Wasm RuntimeはいわばJVMやRubyVMのようなもので、本書を最後まで読み実装することでVMがどのように動作しているのかも合わせて理解できます。
