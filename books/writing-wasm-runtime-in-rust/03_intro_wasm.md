@@ -61,6 +61,7 @@ wasmtime-cli 12.0.1
 ```
 
 次に`wat2wasm`を使ってWasmバイナリを出力して、`wasmtime`を使って実行する。
+`wat2wasm`は`WAT`をWasmバイナリにコンパイルしてくれるCLIである。
 
 ```sh
 # コンパイル

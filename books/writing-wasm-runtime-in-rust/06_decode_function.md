@@ -92,7 +92,7 @@ match code {
 }
 ```
 
-`SectionCode`を用意できたので、次にセクションヘッダーをデコードする関数`decode_section_header()`を実装していく。
+次にセクションヘッダーをデコードする関数`decode_section_header()`を実装していく。
 この関数は入力から`section code`と`section size`を取得するだけだが、いくつか新しいことをやっているのでそれについて解説していく。
 
 ```diff:src/binary/module.rs
@@ -129,9 +129,10 @@ match code {
      use crate::binary::module::Module;
 ```
 
-①の`pair`は複数のパーサーをもとに、新しいパーサーを返すパーサーである。
-`section code`と`section size`はフォーマットが決まっているので、それぞれをパースする関数をまとめて1回の関数呼び出しで処理できるように`pair`を使っている。
-`pair`を使わない場合は、次のような実装になる。
+①の`pair()`は2つのパーサーをもとに、新しいパーサーを返してくれる。
+`pair()`を使っている理由だが、`section code`と`section size`はフォーマットが決まっているので、それぞれをパースする関数をまとめて1回の関数呼び出しで処理できるようするためである。
+
+`pair`を使わない場合は次のような実装になる。
 
 ```rust
 let (input, code) = le_u8(input);
@@ -190,7 +191,7 @@ impl From<u8> for SectionCode {
 +                        _ => todo!(), // ④
 +                    };
 +
-+                    remaining = rest; // ④
++                    remaining = rest; // ⑤
 +                }
 +                Err(err) => return Err(err),
 +            }
@@ -202,16 +203,18 @@ impl From<u8> for SectionCode {
 
 上記の実装では、次のことをやっている。
 
-- ① 入力が空になるまで、②~⑤の処理をループする
+- ① 入力である`remaining`が空になるまで、②~⑤の処理をループする
 - ② セクションヘッダーをデコードし、セクションコードとサイズ、残りの入力を取得
-- ③ セクションサイズ分のバイト列を残りの入力から更に取得する（`take()`は指定したサイズ分だけ読み取るパーサー）
-- ④ 各種セクションのデコード処理（これから実装していく）
+- ③ セクションサイズ分のバイト列を残りの入力から更に取得する
+  - `take()`は指定したサイズ分だけ読み取るパーサー
+  - 読み取ったバイト列は`section_contents`、残りは`rest`
+- ④ 各種セクションのデコード処理
 - ⑤ 残りの入力を次のループで使うため、`remaining`に再代入
 
 やっていることはシンプルだが、これを読んでピンと来ない方も多いと思う。
 なので、バイナリ構造をもとに上記の②~⑤の処理を考えてみる。
 
-まず`Type Section`とその次の`Function Section`のバイナリ構造体の部分を抜き出すと次のとおりである。
+まず`Type Section`と`Function Section`のバイナリ構造体の部分を抜き出すと次のとおりである。
 
 ```
 ; section "Type" (1)
@@ -251,19 +254,33 @@ impl From<u8> for SectionCode {
 
 ④では`section_contents`を更にデコードしていく。
 
-⑤では`remaining`に`rest`の値が入る、この時点で次のセクションのデータ入力としてまた②に戻って処理を行う
+⑤では`remaining`に`rest`の値が入る、この時点で`remaining`が次のセクションの入力になる。
 
 | remaining                     |
 |-------------------------------|
 | [0x03, 0x02, 0x01, 0x00, ...] |
 
 このように、繰り返し入力を消費して各セクションをデコード処理していく。
-理解してしまえばシンプルだが、理解するまでは繰り返し読み直したり、読者自身で書いてみたりすると良いと思う。
+理解してしまえばシンプルだが、理解するまでは繰り返し本章の説明を読み直したり、読者自身で書いてみたりすると良いと思う。
 
 ### `Type Section`のデコード
 骨組みができたので、続けて`Type Section`のデコード処理を実装していく。
 `Type Section`は関数シグネチャ情報を持つセクションで、シグネチャは引数と戻り値の組み合わせである。
-そのため、まずは`src/binary/types.rs`ファイルを作って、シグネチャの構造体を定義していく。
+
+バイナリ構造は次のとおり。
+
+```
+; section "Type" (1)
+0000008: 01               ; section code
+0000009: 04               ; section size
+000000a: 01               ; num types
+; func type 0
+000000b: 60               ; func
+000000c: 00               ; num params
+000000d: 00               ; num results
+```
+
+まずは`src/binary/types.rs`ファイルを作って、シグネチャの構造体を定義していく。
 
 ```rust:src/binary/types.rs
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -295,11 +312,14 @@ impl From<u8> for ValueType {
 +pub mod types;
 ```
 
+`ValueType`は引数の型を表現している。
+今回は引数がないためバイナリ構造には型情報が出てこないが、`0x7F`なら`i32`、`0x7E`なら`i64`という仕様になっている。
+
 :::message
 `Wasm spec`では`i32`、`i64`、`f32`、`f64`の4つの値が定義されているが、今回は`i32`と`i64`があれば良いので`ValueType`はその2つのみ実装する
 :::
 
-続けて、`Module`構造体に`type_section`フィールドを追加するのと、④の`todo!()`を実装していく。
+続けて、`Module`構造体に`type_section`フィールドを追加するのと`todo!()`を実装していく。
 
 ```diff:src/binary/module.rs
 -use super::section::SectionCode;
@@ -348,8 +368,8 @@ impl From<u8> for ValueType {
  
 ```
 
-`decode_type_section()`は実際に`Type Sectio`のデコード処理をしている関数だが、少し複雑になってくるので、ひとまず固定のデータを返すようにする
-引数と戻り値のデコードと合わせて別途実装する。
+`decode_type_section()`は実際に`Type Section`のデコード処理をしている関数だが、少し複雑になってくるので、ひとまず固定のデータを返すようにする
+引数と戻り値のデコードと合わせて次章で実装する。
 
 ```diff:src/binary/module.rs
 @@ -77,6 +77,14 @@ fn decode_section_header(input: &[u8]) -> IResult<&[u8], (SectionCode, u32)> {
@@ -370,9 +390,9 @@ impl From<u8> for ValueType {
 ```
 
 ### `Function Section`のデコード
-`Function Section`は関数本体の型情報(`Type Section`)を紐付けるための領域であると[Wasmバイナリの構造の章](/books/writing-wasm-runtime-in-rust/04_wasm_binary_structure%252Emd)で説明をした。
+`Function Section`は[Wasmバイナリの構造の章](/books/writing-wasm-runtime-in-rust/04_wasm_binary_structure%252Emd)で説明をしたとおり、関数のシグネチャ情報(`Type Section`)を紐付けるための領域である。
 
-`Function Section`のバイナリ構造の部分だけ抜き出すと次のとおり。
+バイナリ構造は次のとおり。
 
 ```
 ; section "Function" (3)
@@ -426,7 +446,7 @@ impl From<u8> for ValueType {
 +    let mut func_idx_list = vec![];
 +    let (mut input, count) = leb128_u32(input)?; // ①
 +
-+    for _ in 0..count {
++    for _ in 0..count { // ②
 +        let (rest, idx) = leb128_u32(input)?;
 +        func_idx_list.push(idx);
 +        input = rest;
@@ -441,16 +461,17 @@ impl From<u8> for ValueType {
 ```
 
 `decode_type_section()`が呼ばれる時点の`input`は次のようになっている。
+`num functions`は関数の個数を表していて、この数だけインデックスの値を読み取っていく。
 
 ```
 0000010: 01               ; num functions
 0000011: 00               ; function 0 signature index
 ```
 
-`num functions`は関数の個数を表していて、この数だけインデックスを読み取る処理をしていく。
+実装の方では、①は`num functions`を読み取り、②の`for`分でその回数だけインデックスの値を読み取っている。
 
 ### `Code Section`のデコード
-`Code Section`は関数の情報が保存されている領域となっている。
+`Code Section`は関数の情報が保存されている領域。
 関数の情報は次の2つから構成されている。
 
 - ローカル変数の個数と型情報
@@ -479,9 +500,9 @@ pub enum Instruction {
 }
 ```
 
-早速これらを実装していこう。まず`src/binary/instruction.rs`ファイルを作成してそこに命令を定義していく。
+まず`src/binary/instruction.rs`ファイルを作成してそこに命令を定義していく。
 
-```rust
+```rust:src/binary/instruction.rs
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Instruction {
     End,
@@ -495,7 +516,7 @@ pub enum Instruction {
  pub mod types;
 ```
 
-続けて、`FunctionLocal`を定義していく。
+続けて、ローカル変数の情報を表す`FunctionLocal`を定義していく。
 
 ```diff:src/binary/types.rs
 @@ -19,3 +19,9 @@ impl From<u8> for ValueType {
@@ -510,7 +531,7 @@ pub enum Instruction {
 +}
 ```
 
-続けて、`Function`を定義していく。
+続けて、関数を表す`Function`を定義していく。
 
 ```diff:src/binary/section.rs
 +use super::{instruction::Instruction, types::FunctionLocal};
@@ -530,7 +551,7 @@ pub enum Instruction {
 ```
 
 続けてデコード処理を実装していきたいが、少し複雑になってくるので現時点ではまずテストを通せる固定のデータ構造を返すようにする。
-デコード実装は後に実装していく。
+デコード実装は次章で実装していく。
 
 ```diff:src/binary/module.rs
 -use super::{section::SectionCode, types::FuncType};
@@ -589,7 +610,7 @@ pub enum Instruction {
 ```
 
 最後にテストを実装して通ることを確認する。
-とってもテストを通すように実装を合わせているだけなので意味は薄いが、次章でちゃんとデコード処理を実装してテスト通すようにしていく。
+といってもテストを通すように実装を合わせているだけなので意味は薄いが、次章でちゃんとデコード処理を実装するので今はこれでよい。
 
 ```diff:src/binary/module.rs
 @@ -126,7 +126,9 @@ fn decode_code_section(_input: &[u8]) -> IResult<&[u8], Vec<Function>> {
@@ -640,5 +661,5 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 ```
 
 ## まとめ
-本章では、一部TODOとして残っているものはあるが、関数デコードの実装を解説した。
-次章は関数の引数、戻り値と合わせてTODOの部分の実装について解説していく。
+本章では、一部TODOが残っているが、関数デコードの実装を解説した。
+大枠はこれで把握できたのではないかと思うので、次章は関数の引数、戻り値と合わせてTODOの部分の実装について解説していく。
