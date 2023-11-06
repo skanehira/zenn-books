@@ -9,18 +9,29 @@ title: "関数の引数と戻り値のデコード実装"
 
 本章ではそれらの処理を実装をしていく。
 
-## 関数の引数と戻り値のデコード
-改めて、前章でコンパイルしたWasmバイナリの`Type Section`は次のとおり。
+## 関数の引数のデコード
+引数のデコードを実装していくので、引数を持つ関数を次のように定義する。
+
+```wat
+(module
+  (func (param i32 i64)
+  )
+)
+```
+
+`Type Section`は次のようになっている。
 
 ```
 ; section "Type" (1)
-0000008: 01               ; section code
-0000009: 04               ; section size
-000000a: 01               ; num types
+0000008: 01      ; section code
+0000009: 06      ; section size
+000000a: 01      ; num types
 ; func type 0
-000000b: 60               ; func
-000000c: 00               ; num params
-000000d: 00               ; num results
+000000b: 60      ; func
+000000c: 02      ; num params
+000000d: 7f      ; i32
+000000e: 7e      ; i64
+000000f: 00      ; num results
 ```
 
 これを次の手順でデコードしていく。
@@ -28,7 +39,7 @@ title: "関数の引数と戻り値のデコード実装"
 1. 関数シグネチャの個数である`num types`を読み取る
     - この値の回数だけ2~6を繰り返す
 2. `func`の値は読み捨てる
-    - 関数シグネチャの種類を表す値だが、バージョン1では`0x60`固定
+    - 関数シグネチャの種類を表す値だが、`Wasm spec`では`0x60`固定
     - 本書では特に使わない
 3. 引数の個数である`num params`を読み取る
 4. 3で取得した値の数だけ、引数の型情報をデコードする
@@ -92,13 +103,12 @@ title: "関数の引数と戻り値のデコード実装"
  }
 ```
 
-新しい関数`many0()`がでてきたので、それについて説明する。
 `many0()`は受け取ったパーサーを使って、入力が終わるまでパースし続けて、入力の残りとパース結果を`Vec`で返す関数である。
 これを使って、「`u8`を読み取って`ValueType`に変換」する関数である`decode_vaue_type()`を繰り返している。
 このように、`many0()`を使うことで`for`を使ってデコードする必要がなくなり、実装がシンプルになる。
 
 実装はできたので、続けてテストを実装していくが、現時点では引数のテストのみとする。
-戻り値をテストするには命令のデコード処理を実装する必要があるので、次のセクションでまとめて実装する。
+戻り値をテストするには命令のデコード処理を実装する必要があるので、別途実装する。
 
 ```diff:/src/binary/module.rs
  #[cfg(test)]
@@ -152,20 +162,219 @@ test binary::module::tests::decode_simplest_func ... ok
 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ```
 
-## ローカル変数と命令のデコード
+## ローカル変数のデコード
+次に、ローカル変数のデコードを実装していく。
+使用するWATコードは次のとおり。
 
-前章でコンパイルしたWasmバイナリの`Code Section`は次のとおり。
-`Code Section`は更に大きく分けて、ローカル変数の情報と命令コードがある。
+```wat
+(module
+  (func
+    (local i32)
+    (local i64 i64)
+  )
+)
+```
+
+`Code Section`のバイナリ構造は次のようになっている。
 
 ```
 ; section "Code" (10)
-0000012: 0a               ; section code
-0000013: 04               ; section size
-0000014: 01               ; num functions
+0000012: 0a         ; section code
+0000013: 08         ; section size 
+0000014: 01         ; num functions
 ; function body 0
-0000015: 02               ; func body size
-0000016: 00               ; local decl count
-0000017: 0b               ; end
+0000015: 06         ; func body size 
+0000016: 02         ; local decl count
+0000017: 01         ; local type count
+0000018: 7f         ; i32
+0000019: 02         ; local type count
+000001a: 7e         ; i64
+000001b: 0b         ; end
+```
+
+これを次の手順でデコードしていく。
+
+1. 関数の個数である`num functions`を読み取る
+    - この値の回数だけ2~5を繰り返す
+2. `func body size`を読み取る
+3. 2で取得した値のバイト列を切り出す
+    - ローカル変数と命令のデコード処理の入力として使用する
+4. 3で取得したバイト列を使ってローカル変数の情報をデコードする
+    1. ローカル変数の個数である`local decl count`を読み取る
+    2. 4-1の値の回数だけ4-3 ~ 4-4の処理を繰り返す
+    3. 型の個数である`local type count`を読み取る
+    4. 4-3の値の回数だけ、値を`ValueType`に変換する
+5. 残りのバイト列を命令にデコードする
+
+5の命令デコードはひとまず次節で実装するが、流れは上記のとおり。
+この手順で実装すると次のとおりになる。
+
+```diff:src/binary/module.rs
+ use super::{
+     instruction::Instruction,
+     section::{Function, SectionCode},
+-    types::{FuncType, ValueType},
++    types::{FuncType, FunctionLocal, ValueType},
+ };
+ use nom::{
+     bytes::complete::{tag, take},
+@@ -138,16 +138,42 @@ fn decode_function_section(input: &[u8]) -> IResult<&[u8], Vec<u32>> {
+     Ok((&[], func_idx_list))
+ }
+ 
+-fn decode_code_section(_input: &[u8]) -> IResult<&[u8], Vec<Function>> {
+-    // TODO: ローカル変数と命令のデコード
+-    let functions = vec![Function {
+-        locals: vec![],
+-        code: vec![Instruction::End],
+-    }];
++fn decode_code_section(input: &[u8]) -> IResult<&[u8], Vec<Function>> {
++    let mut functions = vec![];
++    let (mut input, count) = leb128_u32(input)?; // 1
++
++    for _ in 0..count {
++        let (rest, size) = leb128_u32(input)?; // 2
++        let (rest, body) = take(size)(rest)?; // 3
++        let (_, body) = decode_function_body(body)?; // 4
++        functions.push(body);
++        input = rest;
++    }
+ 
+     Ok((&[], functions))
+ }
+ 
++fn decode_function_body(input: &[u8]) -> IResult<&[u8], Function> {
++    let mut body = Function::default();
++
++    let (mut input, count) = leb128_u32(input)?; // 4-1
++
++    for _ in 0..count { // 4-2
++        let (rest, type_count) = leb128_u32(input)?; // 4-3
++        let (rest, value_type) = le_u8(rest)?; // 4-4
++        body.locals.push(FunctionLocal {
++            type_count,
++            value_type: value_type.into(),
++        });
++        input = rest;
++    }
++
++    // TODO: 命令のデコード
++    body.code = vec![Instruction::End];
++
++    Ok((&[], body))
++}
++
+ #[cfg(test)]
+ mod tests {
+     use crate::binary::{
+```
+
+実装はできたので、続けてテストを実装していく。
+
+```diff:src/binary/module.rs
+@@ -180,7 +180,7 @@ mod tests {
+         instruction::Instruction,
+         module::Module,
+         section::Function,
+-        types::{FuncType, ValueType},
++        types::{FuncType, ValueType, FunctionLocal},
+     };
+     use anyhow::Result;
+ 
+@@ -232,4 +232,35 @@ mod tests {
+         );
+         Ok(())
+     }
++
++    #[test]
++    fn decode_func_local() -> Result<()> {
++        let wasm = wat::parse_file("src/fixtures/func_local.wat")?;
++        let module = Module::new(&wasm)?;
++        assert_eq!(
++            module,
++            Module {
++                type_section: Some(vec![FuncType::default()]),
++                function_section: Some(vec![0]),
++                code_section: Some(vec![Function {
++                    locals: vec![
++                        FunctionLocal {
++                            type_count: 1,
++                            value_type: ValueType::I32,
++                        },
++                        FunctionLocal {
++                            type_count: 2,
++                            value_type: ValueType::I64,
++                        },
++                    ],
++                    code: vec![Instruction::End],
++                }]),
++                ..Default::default()
++            }
++        );
++        Ok(())
++    }
+ }
+```
+
+テストデータも用意する。
+
+```wat:src/fixtures/func_local.wat
+(module
+  (func
+    (local i32)
+    (local i64 i64)
+  )
+)
+```
+
+問題なければ次のとおり、テストは通る。
+
+```sh
+running 4 tests
+test binary::module::tests::decode_simplest_module ... ok
+test binary::module::tests::decode_simplest_func ... ok
+test binary::module::tests::decode_func_param ... ok
+test binary::module::tests::decode_func_local ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+## 命令のデコード
+Wasmの命令は基本的に、オペコードとオペランドの2つから構成されている。
+オペコードは命令の識別番号で、その命令がどんなことを行うかを示す部分である。
+オペランドはその命令の対象となるものを示す部分である。
+
+たとえばWasmでは`i32.const`という命令はオペランドの値をスタックにpushするという操作である。
+`(i32.const 1)`の場合は`1`、`(i32.const 2)`は`2`をスタックにpushするという意味になる。
+
+本節では次のWATをデコードできるように実装していく。
+
+```wat
+(module
+  (func (param i32 i32) (result i32)
+    (local.get 0)
+    (local.get 1)
+    i32.add
+  )
+)
+```
+
+`Code Section`のバイナリ構造は次のとおり。
+
+```
+; section "Code" (10)
+0000015: 0a                                        ; section code
+0000016: 09                                        ; section size
+0000017: 01                                        ; num functions
+; function body 0
+0000018: 07                                        ; func body size
+0000019: 00                                        ; local decl count
+000001a: 20                                        ; local.get
+000001b: 00                                        ; local index
+000001c: 20                                        ; local.get
+000001d: 01                                        ; local index
+000001e: 6a                                        ; i32.add
+000001f: 0b                                        ; end
 ```
 
 これを次の手順でデコードしていく。
