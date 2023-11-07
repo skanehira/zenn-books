@@ -344,10 +344,17 @@ Wasmの命令は基本的に、オペコードとオペランドの2つから構
 オペコードは命令の識別番号で、その命令がどんなことを行うかを示す部分である。
 オペランドはその命令の対象となるものを示す部分である。
 
-たとえばWasmでは`i32.const`という命令はオペランドの値をスタックにpushするという操作である。
+たとえば`i32.const`という命令はオペランドの値をスタックにpushするという操作で、
 `(i32.const 1)`の場合は`1`、`(i32.const 2)`は`2`をスタックにpushするという意味になる。
 
-本節では次のWATをデコードできるように実装していく。
+なお、オペランドが存在しない命令もある。
+たとえば、`i32.add`はスタックから値を2つpopして加算した結果をスタックにpushするが、この命令にはオペランドはない。
+
+このように、オペコードごとにどんな操作を行うかは[Wasm SpecのIndex of Instructions](https://www.w3.org/TR/wasm-core-1/#a7-index-of-instructions)に定義されている。
+Indexを見るとかなりの命令数があるが、本書では数個の命令だけ実装する。
+
+デコードの話に戻るが、 本節では次のWATをデコードできるように実装していく。
+これは引数を2つ受け取って加算した結果を返す関数である。
 
 ```wat
 (module
@@ -377,15 +384,155 @@ Wasmの命令は基本的に、オペコードとオペランドの2つから構
 000001f: 0b                                        ; end
 ```
 
-これを次の手順でデコードしていく。
+処理の流れは前の節で解説したので、命令のデコードの部分のみの手順を示す。
 
-1. 関数の個数である`num functions`を読み取る
-    - この値の回数だけ2~5を繰り返す
-2. `func body size`を読み取る
-3. 2で取得した値のバイト列を切り出す
-    - ローカル変数と命令のデコード処理の入力として使用する
-4. 3で取得したバイト列を使ってローカル変数の情報をデコードする
 5. 残りのバイト列を命令にデコードする
+    1. 1バイト読み取り、オペコードに変換
+    2. オペコードの種類に応じて、オペランドを読み取る
+        - `local.get`の場合は更に4バイト読み取って、u32に変換してから命令に変換
+        - `i32.add`と`end`の場合は、そのまま命令に変換
 
+この手順を実装していく。
+
+まずオペコード定義するファイル`src/binary/opcode.rs`を作成して、オペコードを定義する。
+
+```rust:src/binary/opcode.rs
+use num_derive::FromPrimitive;
+
+#[derive(Debug, FromPrimitive, PartialEq)]
+pub enum Opcode {
+    End = 0x0B,
+    LocalGet = 0x20,
+    I32Add = 0x6A,
+}
+```
+
+```diff:src/binary.rs
+ pub mod instruction;
+ pub mod module;
++pub mod opcode;
+ pub mod section;
+ pub mod types;
+```
+
+続けて、命令の定義を追加する。
+
+```diff:src/binary/module.rs
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub enum Instruction {
+     End,
++    LocalGet(u32),
++    I32Add,
+ }
+```
+
+```diff:src/binary/module.rs
+ use super::{
+     instruction::Instruction,
+     section::{Function, SectionCode},
+-    types::{FuncType, FunctionLocal, ValueType},
++    types::{FuncType, FunctionLocal, ValueType}, opcode::Opcode,
+ };
+ use nom::{
+     bytes::complete::{tag, take},
+@@ -168,12 +168,31 @@ fn decode_function_body(input: &[u8]) -> IResult<&[u8], Function> {
+         input = rest;
+     }
+ 
+-    // TODO: 命令のデコード
+-    body.code = vec![Instruction::End];
++    let mut remaining = input;
++
++    while !remaining.is_empty() { // 5
++        let (rest, inst) = decode_instructions(remaining)?;
++        body.code.push(inst);
++        remaining = rest;
++    }
+ 
+     Ok((&[], body))
+ }
+ 
++fn decode_instructions(input: &[u8]) -> IResult<&[u8], Instruction> {
++    let (input, byte) = le_u8(input)?;
++    let op = Opcode::from_u8(byte).unwrap_or_else(|| panic!("invalid opcode: {:X}", byte)); // 5-1
++    let (rest, inst) = match op { // 5-2
++        Opcode::End => (input, Instruction::End),
++        Opcode::LocalGet => {
++            let (rest, idx) = leb128_u32(input)?;
++            (rest, Instruction::LocalGet(idx))
++        }
++        Opcode::I32Add => (input, Instruction::I32Add),
++    };
++    Ok((rest, inst))
++}
++
+ #[cfg(test)]
+ mod tests {
+     use crate::binary::{
+```
+
+続けて、テストを実装してく。
+
+```diff:src/binary/module.rs
+@@ -280,4 +280,31 @@ mod tests {
+         );
+         Ok(())
+     }
++
++    #[test]
++    fn decode_func_code() -> Result<()> {
++        let wasm = wat::parse_file("src/fixtures/func_code.wat")?;
++        let module = Module::new(&wasm)?;
++        assert_eq!(
++            module,
++            Module {
++                type_section: Some(vec![FuncType {
++                    params: vec![ValueType::I32, ValueType::I32],
++                    results: vec![ValueType::I32],
++                }]),
++                function_section: Some(vec![0]),
++                code_section: Some(vec![Function {
++                    locals: vec![],
++                    code: vec![
++                        Instruction::LocalGet(0),
++                        Instruction::LocalGet(1),
++                        Instruction::I32Add,
++                        Instruction::End
++                    ],
++                }]),
++                ..Default::default()
++            }
++        );
++        Ok(())
++    }
+ }
+```
+
+テストデータも用意する。
+
+```wat:/src/fixtures/func_code.wat
+(module
+  (func (param i32 i32) (result i32)
+    (local.get 0)
+    (local.get 1)
+    i32.add
+  )
+)
+```
+
+問題なければ次のとおり、テストは通る。
+
+```sh
+running 5 tests
+test binary::module::tests::decode_simplest_module ... ok
+test binary::module::tests::decode_simplest_func ... ok
+test binary::module::tests::decode_func_param ... ok
+test binary::module::tests::decode_func_code ... ok
+test binary::module::tests::decode_func_local ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
 
 ## まとめ
+本章では、関数の引数と戻り値のデコード実装について解説した。
+最低限の動く関数をデコードできるようになったので、次は関数の実行部分の実装について解説していく。
