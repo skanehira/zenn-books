@@ -1,11 +1,11 @@
 ---
-title: "関数の引数と戻り値のデコード実装"
+title: "関数のデコード実装 その2"
 ---
 
-前章ではもっともシンプルな関数のデコードを実装したが、以下のTODOを残していた。
+前章では何もしないもっとも小さな関数のデコードを実装したが、以下のTODOを残していた。
 
-- `Type Section`での引数と戻り値のデコード
-- `Code Section`でのローカル変数と命令のデコード
+- `Type Section`の引数と戻り値のデコード
+- `Code Section`のローカル変数と命令のデコード
 
 本章ではそれらの処理を実装をしていく。
 
@@ -42,13 +42,13 @@ title: "関数の引数と戻り値のデコード実装"
     - 関数シグネチャの種類を表す値だが、`Wasm spec`では`0x60`固定
     - 本書では特に使わない
 3. 引数の個数である`num params`を読み取る
-4. 3で取得した値の数だけ、引数の型情報をデコードする
+4. `num params`の回数だけ、引数の型情報をデコードする
     - `0x7F`の場合は`i32`、`0x7E`の場合は`i64`なので、それぞれ`ValueType`に変換
 5. 戻り値の個数である`num results`を読み取る
-6. 5で取得した値の数だけ、戻り値の型情報をデコードする
+6. `num results`の回数だけ、戻り値の型情報をデコードする
     - `0x7F`の場合は`i32`、`0x7E`の場合は`i64`なので、それぞれ`ValueType`に変換
 
-上記の処理を実装すると次のとおり。
+上記の手順を実装すると次のとおり。
 コメントの番号がそれぞれ上記の手順である。
 
 ```diff:/src/binary/module.rs
@@ -103,7 +103,7 @@ title: "関数の引数と戻り値のデコード実装"
  }
 ```
 
-`many0()`は受け取ったパーサーを使って、入力が終わるまでパースし続けて、入力の残りとパース結果を`Vec`で返す関数である。
+`many0()`は受け取った関数を使って、入力が終わるまでパースし続けて、入力の残りとパース結果を`Vec`で返す関数である。
 これを使って、「`u8`を読み取って`ValueType`に変換」する関数である`decode_vaue_type()`を繰り返している。
 このように、`many0()`を使うことで`for`を使ってデコードする必要がなくなり、実装がシンプルになる。
 
@@ -201,9 +201,9 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
     - ローカル変数と命令のデコード処理の入力として使用する
 4. 3で取得したバイト列を使ってローカル変数の情報をデコードする
     1. ローカル変数の個数である`local decl count`を読み取る
-    2. 4-1の値の回数だけ4-3 ~ 4-4の処理を繰り返す
+    2. `local decl count`の回数だけ4-3 ~ 4-4の処理を繰り返す
     3. 型の個数である`local type count`を読み取る
-    4. 4-3の値の回数だけ、値を`ValueType`に変換する
+    4. `local type count`の回数だけ値を`ValueType`に変換する
 5. 残りのバイト列を命令にデコードする
 
 5の命令デコードはひとまず次節で実装するが、流れは上記のとおり。
@@ -348,13 +348,19 @@ Wasmの命令は基本的に、オペコードとオペランドの2つから構
 `(i32.const 1)`の場合は`1`、`(i32.const 2)`は`2`をスタックにpushするという意味になる。
 
 なお、オペランドが存在しない命令もある。
-たとえば、`i32.add`はスタックから値を2つpopして加算した結果をスタックにpushするが、この命令にはオペランドはない。
+たとえば、`i32.add`はスタックから値を2つ`pop`して加算した結果をスタックに`push`するが、この命令にはオペランドはない。
 
-このように、オペコードごとにどんな操作を行うかは[Wasm SpecのIndex of Instructions](https://www.w3.org/TR/wasm-core-1/#a7-index-of-instructions)に定義されている。
+このように、オペコードごとにどんな操作を行うかはWasm Specの[Index of Instructions](https://www.w3.org/TR/wasm-core-1/#a7-index-of-instructions)で見ることができる。
 Indexを見るとかなりの命令数があるが、本書では数個の命令だけ実装する。
 
 デコードの話に戻るが、 本節では次のWATをデコードできるように実装していく。
 これは引数を2つ受け取って加算した結果を返す関数である。
+
+`local.get`は引数を取得してスタックに`push`する命令で、オペランドは引数のインデックスとなる。
+例えば1つ目の引数を取得したい場合は`0`、2つ目は`1`と言った感じ。
+
+`i32.add`は先程解説したとおり、スタックから値を2つ`pop`して加算する。
+結果、2つの引数を加算した値がスタックに積まれ、関数の呼び出し元に戻った際にスタックから値を`pop`して戻り値を取得できる。
 
 ```wat
 (module
@@ -389,12 +395,12 @@ Indexを見るとかなりの命令数があるが、本書では数個の命令
 5. 残りのバイト列を命令にデコードする
     1. 1バイト読み取り、オペコードに変換
     2. オペコードの種類に応じて、オペランドを読み取る
-        - `local.get`の場合は更に4バイト読み取って、u32に変換してから命令に変換
-        - `i32.add`と`end`の場合は、そのまま命令に変換
+        1. `local.get`の場合は更に4バイト読み取って、`u32`に変換してからオペコードと合わせて命令に変換
+        2. `i32.add`と`end`の場合は、そのまま命令に変換
 
 この手順を実装していく。
 
-まずオペコード定義するファイル`src/binary/opcode.rs`を作成して、オペコードを定義する。
+まずオペコードを定義するファイル`src/binary/opcode.rs`を作成して、オペコードを定義する。
 
 ```rust:src/binary/opcode.rs
 use num_derive::FromPrimitive;
@@ -456,12 +462,12 @@ pub enum Opcode {
 +    let (input, byte) = le_u8(input)?;
 +    let op = Opcode::from_u8(byte).unwrap_or_else(|| panic!("invalid opcode: {:X}", byte)); // 5-1
 +    let (rest, inst) = match op { // 5-2
-+        Opcode::End => (input, Instruction::End),
-+        Opcode::LocalGet => {
++        Opcode::LocalGet => { // 5-2-1
 +            let (rest, idx) = leb128_u32(input)?;
 +            (rest, Instruction::LocalGet(idx))
 +        }
-+        Opcode::I32Add => (input, Instruction::I32Add),
++        Opcode::I32Add => (input, Instruction::I32Add), // 5-2-2
++        Opcode::End => (input, Instruction::End), // 5-2-2
 +    };
 +    Ok((rest, inst))
 +}
@@ -534,5 +540,5 @@ test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 ```
 
 ## まとめ
-本章では、関数の引数と戻り値のデコード実装について解説した。
+本章では、関数の引数と戻り値、そしてローカル変数と命令のデコード実装について解説した。
 最低限の動く関数をデコードできるようになったので、次は関数の実行部分の実装について解説していく。

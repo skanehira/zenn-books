@@ -2,7 +2,8 @@
 title: "バイナリデコードの基本的な実装方法"
 ---
 
-本章では[nom](https://crates.io/crates/nom)という[パーサーコンビネーター](https://en.wikipedia.org/wiki/Parser_combinator)を使ってWasmバイナリをどのようにデコードするかについて解説していく。
+本章では[nom](https://crates.io/crates/nom)という[パーサーコンビネーター](https://en.wikipedia.org/wiki/Parser_combinator)を使って、
+プリアンブルしか存在しないWasmバイナリをデコードしながら、バイナリデコードの基本について解説していく。
 
 ## 準備
 早速Rustのプロジェクトを作成して、必要なクレートを導入しよう。
@@ -15,41 +16,20 @@ $ cargo new tiny-wasm-runtime --name tinywasm
 
 ```toml:Cargo.toml
 [dependencies]
-anyhow = "1.0.71"
-nom = "7.1.3"
-nom-leb128 = "0.2.0"
-num-derive = "0.4.0"
-num-traits = "0.2.15"
+anyhow = "1.0.71"     # エラーハンドリングを簡易にできるクレート
+nom = "7.1.3"         # パーサーコンビネーター
+nom-leb128 = "0.2.0"  # LEB128という可変長符号圧縮された数値をデコードするためのクレート
+num-derive = "0.4.0"  # 数値型の変換を便利にするクレート
+num-traits = "0.2.15" # 数値型の変換を便利にするクレート
 
 [dev-dependencies]
-wat = "=1.0.67"
-pretty_assertions = "1.4.0"
-```
-
-ちなみに本章のプロジェクトレイアウトは最終的に次のようになる。
-
-```
-tiny-wasm-runtime/
- src/
-  binary/
-   instruction.rs # Wasm命令の定義
-   module.rs      # モジュールの定義
-   opcode.rs      # オペコードの定義
-   section.rs     # 各種セクションの定義
-   types.rs       # 各種型の定義
-   fixtures/      # 各種テストデータ
-    call.wat
-    data.wat
-    export.wat
-   ...
-  binary.rs
-  execution.rs
-  lib.rs
-  main.rs
+wat = "=1.0.67"             # WATからWasmバイナリをコンパイルするためのクレート
+pretty_assertions = "1.4.0" # テスト時の差分を見やすくしてくれるクレート
 ```
 
 ## プリアンブルのデコード
 プリアンブルは[Wasmバイナリの構造の章](/books/writing-wasm-runtime-in-rust/04_wasm_binary_structure%252Emd)で説明したとおり、次のようなバイナリ構造になっている。
+全部で8バイトあり、先頭の4バイトは`\0asm`、残りの4バイトはバージョン情報となっている。
 
 ```
            \0asm
@@ -64,7 +44,7 @@ tiny-wasm-runtime/
 0000004: 0100 0000      ; WASM_BINARY_VERSION
 ```
 
-これをRustの構造体で表現すると次のとおり。とてもシンプルなのが分かる。
+これをRustの構造体で表現すると次のとおり。
 
 ```rust
 pub struct Module {
@@ -73,8 +53,7 @@ pub struct Module {
 }
 ```
 
-データ構造がわかったので、次は実装を進めていく。
-実装は小さく初めるのがよいので、最初にもっとも小さなモジュールを定義して、そのデコード処理を実装していく。
+実装は小さく初めるのがよいので、最初はプリアンブルのデコード処理を実装していく。
 
 まずは`src`配下に次のファイルを作成する。
 
@@ -82,7 +61,7 @@ pub struct Module {
 - `src/lib.rs`
 - `src/binary/module.rs`
 
-それぞれ、次のように記述する
+それぞれ、次のように記述する。
 
 ```rust:src/binary/module.rs
 #[derive(Debug, PartialEq, Eq)]
@@ -101,7 +80,7 @@ pub mod binary;
 ```
 
 次にテストを実装していく。
-テストは基本的にWATで書いたコードをWasmバイナリにコンパイルして、それをデコードした結果が想定した構造になっていることを確認していく。
+テストは基本的にWATコードをWasmバイナリにコンパイルして、それをデコードした結果が想定したデータ構造になっていることを確認していく。
 
 ```diff:src/binary/module.rs
 @@ -3,3 +3,17 @@ pub struct Module {
@@ -116,7 +95,7 @@ pub mod binary;
 +
 +    #[test]
 +    fn decode_simplest_module() -> Result<()> {
-+        // 最も小さなモジュールを定義して、wasmバイナリにコンパイル
++        // プリアンブルしか存在しないwasmバイナリを生成
 +        let wasm = wat::parse_str("(module)")?;
 +        // バイナリをデコードしてModule構造体を生成
 +        let module = Module::new(&wasm)?;
@@ -128,6 +107,8 @@ pub mod binary;
 ```
 
 上記のコードで分かるように、テストをパスするためには`Moduele::new()`と`Module::default()`を実装する必要がある。
+`Magic number`とバージョンは不変なので、`Default`トレイトを実装してテスト時の記述量を減らす。
+
 まずは`Default()`を実装していく。
 
 ```diff:src/binary/module.rs
@@ -147,8 +128,6 @@ pub mod binary;
  mod tests {
      use crate::binary::module::Module;
 ```
-
-`Magic number`とバージョンは不変なので、`Default`トレイトを実装して記述量を減らす。
 
 続けて、デコード処理の実装をしていく。
 
@@ -202,11 +181,11 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 ```
 
 ### デコード処理の解説
-`nom`を使ったことがない方は上記のコードを読んでもよくわからないと思うのですこし解説する。
+`nom`を使ったことがない方は上記のコードを読んでもよくわからないと思うの解説していく。
 理解できている方は読み飛ばして問題ない。
 
-まず、`nom`は入力を受け取って、読み取った部分と残りの部分をタプルで返すという設計になっている。
-なので、たとえば次の`le_u32()`に入力を渡すと、`(残りの部分, 読み取った部分)`という感じの結果を得られる。
+まず、`nom`は入力のバイト列を受け取って、読み取ったバイト列と残りのバイト列をタプルで返すという設計になっている。
+なので、たとえば次の`le_u32()`に入力を渡すと、`(残りのバイト列, 読み取ったバイト列)`という結果を得られる。
 
 ```rust
 let (input, version) = le_u32(input)?;
@@ -216,8 +195,8 @@ let (input, version) = le_u32(input)?;
 なので、バイト列から`u32`な数値を取得したい場合はこの関数を使えばよい。
 
 また、`nom`は`tag()`というパーサーも提供していている。
-こちらは入力を読み取り、渡した値と一致しない場合はエラーを返すという挙動をする。
-つまり入力のバリデーションと読み取りを同時に処理できるともいえる。
+こちらは`tag()`に渡したバイト列と入力が一致しない場合はエラーを返すという挙動をする。
+これは、入力のバリデーションと読み取りを同時に処理できるともいえる。
 
 上記のコードを見ると`b"\0asm"`を`tag()`に渡して、入力を読み取って残りの入力だけを取得する処理ということが分かる。
 
@@ -231,7 +210,7 @@ let (input, _) = tag(b"\0asm")(input)?;
 Error: failed to parse wasm: Parsing Error: Error { input: [0, 97, 115, 109, 1, 0, 0, 0], code: Tag }
 ```
 
-一度まとめると、`decode()`関数の処理は
+まとめると、`decode()`関数の処理は
 
 - バイナリの先頭から4バイトを読み取り、`\0asm`であれば残りの入力を受取る
 - 残りの入力からさらに4バイト読み取って残りと`u32`に変換した値の入力を受取る
@@ -241,7 +220,7 @@ Error: failed to parse wasm: Parsing Error: Error { input: [0, 97, 115, 109, 1, 
 [^1]: `Wasm spec`では、バイナリはリトルエンディアンでエンコードされている
 
 ## まとめ
-本章ではプリアンブルのデコードを実際に実装して、`nom`の使い方やデコード処理の流れについて解説した。
+本章ではプリアンブルのデコードを実際に実装して、`nom`の基本的な使い方やデコード処理の流れについて解説した。
 
 バイナリのデコードは基本的にバイト列をフォーマットに従って解析し、所定のデータ型に変換することを繰り返していくだけなので、やること自体はとてもシンプルである。
 

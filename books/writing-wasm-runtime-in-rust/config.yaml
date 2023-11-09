@@ -11,5 +11,5 @@ chapters:
   - 03_intro_wasm
   - 04_wasm_binary_structure
   - 05_how_decode_wasm_binary
-  - 06_decode_function
-  - 07_decode_function_param_result
+  - 06_decode_function_1
+  - 07_decode_function_2

@@ -1,10 +1,11 @@
 ---
-title: "関数のデコード実装"
+title: "関数のデコード実装 その1"
 ---
 
 前章ではデコードの基本的な実装方法について解説をしたので、本章では関数をデコードできるように実装していく。
 
-まず、手始めに次のようなもっとも小さな関数をデコードできるように実装をしていく。
+まず、手始めに次のように何もしないもっとも小さな関数をデコードできるように実装をしていく。
+
 ```wat
 (module
   (func)
@@ -59,15 +60,11 @@ use num_derive::FromPrimitive;
 
 #[derive(Debug, PartialEq, Eq, FromPrimitive)]
 pub enum SectionCode {
-    Custom = 0x00,
     Type = 0x01,
     Import = 0x02,
     Function = 0x03,
     Memory = 0x05,
-    Global = 0x06,
     Export = 0x07,
-    Start = 0x08,
-    Element = 0x09,
     Code = 0x0a,
     Data = 0x0b,
 }
@@ -78,7 +75,7 @@ pub enum SectionCode {
 +pub mod section;
 ```
 
-この`SectionCode`をみて、各セクションのデコード処理が分岐していくことになる。
+この`SectionCode`をみて、各セクションのデコード処理が分岐していく。
 
 ```rust
 match code {
@@ -93,7 +90,7 @@ match code {
 ```
 
 次にセクションヘッダーをデコードする関数`decode_section_header()`を実装していく。
-この関数は入力から`section code`と`section size`を取得するだけだが、いくつか新しいことをやっているのでそれについて解説していく。
+この関数は入力から`section code`と`section size`を取得するだけだが、いくつか新しい関数があるのでそれについて解説していく。
 
 ```diff:src/binary/module.rs
 -use nom::{IResult, number::complete::le_u32, bytes::complete::tag};
@@ -132,14 +129,14 @@ match code {
 ①の`pair()`は2つのパーサーをもとに、新しいパーサーを返してくれる。
 `pair()`を使っている理由だが、`section code`と`section size`はフォーマットが決まっているので、それぞれをパースする関数をまとめて1回の関数呼び出しで処理できるようするためである。
 
-`pair`を使わない場合は次のような実装になる。
+`pair()`を使わない場合は次のような実装になる。
 
 ```rust
 let (input, code) = le_u8(input);
 let (input, size) = leb128_u32(input);
 ```
 
-`section code`は1バイト固定なので今回は`le_u8()`を使っている。
+`section code`は1バイト固定なので`le_u8()`を使っている。
 `section size`はLEB128[^1]でエンコードされた`u32`なので、値を読み取る際は`leb128_u32()`を使う必要がある。
 
 :::message alert
@@ -163,9 +160,7 @@ impl From<u8> for SectionCode {
 }
 ```
 
-[^1]: 任意の大きさなの数値を少ないバイト数で格納するための可変長符号圧縮の方式
-
-セクションヘッダーのデコードの実装はできたので、続けて次のようにデコード処理の骨組みを実装していく。
+セクションヘッダーのデコードの実装はできたので、続けてデコード処理の骨組みを実装していく。
 
 ```diff:src/binary/module.rs
  use super::section::SectionCode;
@@ -203,13 +198,13 @@ impl From<u8> for SectionCode {
 
 上記の実装では、次のことをやっている。
 
-- ① 入力である`remaining`が空になるまで、②~⑤の処理をループする
+- ① 入力である`remaining`が空になるまで、②~⑤の処理を繰り返す
 - ② セクションヘッダーをデコードし、セクションコードとサイズ、残りの入力を取得
 - ③ セクションサイズ分のバイト列を残りの入力から更に取得する
-  - `take()`は指定したサイズ分だけ読み取るパーサー
+  - `take()`は指定したサイズ分だけ、入力を読み取る関数
   - 読み取ったバイト列は`section_contents`、残りは`rest`
-- ④ 各種セクションのデコード処理
-- ⑤ 残りの入力を次のループで使うため、`remaining`に再代入
+- ④ 各種セクションのデコード処理を記述する
+- ⑤ 残りの入力`rest`を次のループで使うため、`remaining`に再代入
 
 やっていることはシンプルだが、これを読んでピンと来ない方も多いと思う。
 なので、バイナリ構造をもとに上記の②~⑤の処理を考えてみる。
@@ -260,8 +255,8 @@ impl From<u8> for SectionCode {
 |-------------------------------|
 | [0x03, 0x02, 0x01, 0x00, ...] |
 
-このように、繰り返し入力を消費して各セクションをデコード処理していく。
-理解してしまえばシンプルだが、理解するまでは繰り返し本章の説明を読み直したり、読者自身で書いてみたりすると良いと思う。
+このように、繰り返し入力を消費して各セクションをデコードしていく。
+理解してしまえばシンプルだが、理解するまでは繰り返し本節の説明を読み直したり、読者自身で書いてみたりすると良いと思う。
 
 ### `Type Section`のデコード
 骨組みができたので、続けて`Type Section`のデコード処理を実装していく。
@@ -313,10 +308,11 @@ impl From<u8> for ValueType {
 ```
 
 `ValueType`は引数の型を表現している。
-今回は引数がないためバイナリ構造には型情報が出てこないが、`0x7F`なら`i32`、`0x7E`なら`i64`という仕様になっている。
+今回は定義した関数に引数がないためバイナリ構造には型情報が出てこないが、`0x7F`なら`i32`、`0x7E`なら`i64`という仕様になっている。
 
 :::message
-`Wasm spec`では`i32`、`i64`、`f32`、`f64`の4つの値が定義されているが、今回は`i32`と`i64`があれば良いので`ValueType`はその2つのみ実装する
+`Wasm Spec`では`i32`、`i64`、`f32`、`f64`の4つの値が定義されているが、
+今回は`i32`と`i64`があれば良いので`ValueType`はその2つのみ実装する
 :::
 
 続けて、`Module`構造体に`type_section`フィールドを追加するのと`todo!()`を実装していく。
@@ -365,10 +361,9 @@ impl From<u8> for ValueType {
 +                        }
                          _ => todo!(),
                      };
- 
 ```
 
-`decode_type_section()`は実際に`Type Section`のデコード処理をしている関数だが、少し複雑になってくるので、ひとまず固定のデータを返すようにする
+`decode_type_section()`は実際に`Type Section`のデコード処理をしている関数だが、少し複雑になってくるので、ひとまず固定のデータを返すようにする。
 引数と戻り値のデコードと合わせて次章で実装する。
 
 ```diff:src/binary/module.rs
@@ -436,6 +431,16 @@ impl From<u8> for ValueType {
 `Function Section`は単に`Type Section`と`Code Section`を紐付けるためのインデックス情報を持っているだけなので、Rustでは`Vec<u32>`で表現する。
 
 続けて、`decode_function_section()`を次のように実装する。
+`decode_type_section()`が呼ばれる時点の`input`は次のようになっている。
+`num functions`は関数の個数を表していて、この数だけインデックスの値を読み取っていく。
+
+```
+0000010: 01               ; num functions
+0000011: 00               ; function 0 signature index
+```
+
+実装は次のようになる。
+①は`num functions`を読み取り、②はその値の回数だけインデックスの値を繰り返し読み取っている。
 
 ```diff:src/binary/module.rs
 @@ -91,6 +91,19 @@ fn decode_type_section(_input: &[u8]) -> IResult<&[u8], Vec<FuncType>> {
@@ -460,16 +465,6 @@ impl From<u8> for ValueType {
      use crate::binary::module::Module;
 ```
 
-`decode_type_section()`が呼ばれる時点の`input`は次のようになっている。
-`num functions`は関数の個数を表していて、この数だけインデックスの値を読み取っていく。
-
-```
-0000010: 01               ; num functions
-0000011: 00               ; function 0 signature index
-```
-
-実装の方では、①は`num functions`を読み取り、②の`for`分でその回数だけインデックスの値を読み取っている。
-
 ### `Code Section`のデコード
 `Code Section`は関数の情報が保存されている領域。
 関数の情報は次の2つから構成されている。
@@ -486,10 +481,10 @@ pub struct Function {
     pub code: Vec<Instruction>,
 }
 
-// ローオカル変数の個数と型情報の定義
+// ローカル変数の個数と型情報の定義
 pub struct FunctionLocal {
-    pub type_count: u32,
-    pub value_type: ValueType,
+    pub type_count: u32,       // ローカル変数の個数
+    pub value_type: ValueType, // 変数の型情報
 }
 
 // 命令の定義
@@ -498,6 +493,21 @@ pub enum Instruction {
     End,
     ...
 }
+```
+
+バイナリ構造は次のとおり。
+何もしない関数の場合、ローカル変数はなし、命令も`end`命令の1つだけとなっている。
+`end`命令は関数の終わりを意味していて、何もしない関数でも`end`は必ず1つあるという仕様となっている。
+
+```
+; section "Code" (10)
+0000012: 0a               ; section code
+0000013: 04               ; section size
+0000014: 01               ; num functions
+; function body 0
+0000015: 02               ; func body size
+0000016: 00               ; local decl count
+0000017: 0b               ; end
 ```
 
 まず`src/binary/instruction.rs`ファイルを作成してそこに命令を定義していく。
@@ -661,5 +671,7 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 ```
 
 ## まとめ
-本章では、一部TODOが残っているが、関数デコードの実装を解説した。
-大枠はこれで把握できたのではないかと思うので、次章は関数の引数、戻り値と合わせてTODOの部分の実装について解説していく。
+一部TODOが残っているが、本章では関数デコードの実装を解説した。
+大枠はこれで把握できたのではないかと思うので、次章は関数の引数、戻り値のデコードと合わせてTODOの部分の実装について解説していく。
+
+[^1]: 任意の大きさなの数値を少ないバイト数で格納するための可変長符号圧縮の方式
