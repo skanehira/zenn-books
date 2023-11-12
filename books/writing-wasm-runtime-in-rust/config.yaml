@@ -13,3 +13,4 @@ chapters:
   - 05_how_decode_wasm_binary
   - 06_decode_function_1
   - 07_decode_function_2
+  - 08_build_runtime
