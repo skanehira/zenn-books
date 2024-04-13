@@ -487,8 +487,8 @@ pub enum Opcode {
      }
 +
 +    #[test]
-+    fn decode_func_code() -> Result<()> {
-+        let wasm = wat::parse_file("src/fixtures/func_code.wat")?;
++    fn decode_func_add() -> Result<()> {
++        let wasm = wat::parse_file("src/fixtures/func_add.wat")?;
 +        let module = Module::new(&wasm)?;
 +        assert_eq!(
 +            module,
@@ -517,7 +517,7 @@ pub enum Opcode {
 
 テストデータも用意する。
 
-```wat:/src/fixtures/func_code.wat
+```wat:/src/fixtures/func_add.wat
 (module
   (func (param i32 i32) (result i32)
     (local.get 0)
@@ -534,7 +534,7 @@ running 5 tests
 test binary::module::tests::decode_simplest_module ... ok
 test binary::module::tests::decode_simplest_func ... ok
 test binary::module::tests::decode_func_param ... ok
-test binary::module::tests::decode_func_code ... ok
+test binary::module::tests::decode_func_add ... ok
 test binary::module::tests::decode_func_local ... ok
 
 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
