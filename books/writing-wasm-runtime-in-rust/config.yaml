@@ -1,4 +1,4 @@
-title: "RustでWasm Runtimeを実装する"
+title: "RustでWasm Runtimeを書く"
 summary: |
   Rustで"Hello World"を出力できる小さなWasm Runtimeを実装して、Wasmの動作原理を理解する本です。
 topics: ["wasm", "rust"] # トピック（5つまで）
