@@ -199,7 +199,6 @@ index e488383..5b4e467 100644
 
 実装で使用する各種セクションはそれぞれ次のデータを持っている。
 
-
 | セクション         | 概要                                 |
 |--------------------|--------------------------------------|
 | `Type Section`     | 関数シグネチャの情報                 |
@@ -233,7 +232,370 @@ Module {
 その値は`type_section`のインデックスになっているので、そのまま`type_section[0]`が`code_section[0]`のシグネチャ情報になる。
 例えば`function_section[0]`の値が1だった場合、`type_section[1]`が`code_section[0]`のシグネチャ情報になる。
 
-## Rntimeの実装
+## `Runtime`の実装
 
+`Runtime`は`Wasm Runtime`そのもので、次の情報を持つ構造体となっている。
+
+- `Store`
+- スタック
+- コールスタック
+
+前章ではスタックとコールスタックについて解説したので、それをどのように実装して使うのかについて解説していく。
+
+まず`src/execution/runtime.rs`を追加して`Runtime`と`Frame`などを定義する。
+
+```rust
+use super::{store::Store, value::Value};
+use crate::binary::{instruction::Instruction, module::Module};
+use anyhow::Result;
+
+#[derive(Default)]
+pub struct Frame {
+    pub pc: isize,               // プログラムカウンタ
+    pub sp: usize,               // スタックポインタ
+    pub insts: Vec<Instruction>, // 命令列
+    pub arity: usize,            // 戻り値の数
+    pub locals: Vec<Value>,      // ローカル変数
+}
+
+#[derive(Default)]
+pub struct Runtime {
+    pub store: Store,
+    pub stack: Vec<Value>,
+    pub call_stack: Vec<Frame>,
+}
+
+impl Runtime {
+    pub fn instantiate(wasm: impl AsRef<[u8]>) -> Result<Self> {
+        let module = Module::new(wasm.as_ref())?;
+        let store = Store::new(module)?;
+        Ok(Self {
+            store,
+            ..Default::default()
+        })
+    }
+}
+```
+
+```diff:src/execution.rs
+diff --git a/src/execution.rs b/src/execution.rs
+index 1a50587..acbafa4 100644
+--- a/src/execution.rs
++++ b/src/execution.rs
+@@ -1,2 +1,3 @@
++pub mod runtime;
+ pub mod store;
+ pub mod value;
+```
+
+`Runtime::instantiate(...)`はWasmバイナリを受け取り`Runtime`を生成する関数である。
+
+### 命令処理の実装
+
+次に、命令を実行する`Runtime::execute(...)`を実装する。
+
+```diff:src/execution/runtime.rs
+diff --git a/src/execution/runtime.rs b/src/execution/runtime.rs
+index c45d764..9db8415 100644
+--- a/src/execution/runtime.rs
++++ b/src/execution/runtime.rs
+@@ -1,6 +1,6 @@
+ use super::{store::Store, value::Value};
+ use crate::binary::{instruction::Instruction, module::Module};
+-use anyhow::Result;
++use anyhow::{bail, Result};
+ 
+ #[derive(Default)]
+ pub struct Frame {
+@@ -27,4 +27,38 @@ impl Runtime {
+             ..Default::default()
+         })
+     }
++
++    fn execute(&mut self) -> Result<()> {
++        loop {
++            let Some(frame) = self.call_stack.last_mut() else { // 1
++                break;
++            };
++
++            frame.pc += 1;
++
++            let Some(inst) = frame.insts.get(frame.pc as usize) else { // 2
++                break;
++            };
++
++            match inst { // 3
++                Instruction::I32Add => {
++                    let (Some(right), Some(left)) = (self.stack.pop(), self.stack.pop()) else {
++                        bail!("not found any value in the stack");
++                    };
++                    let result = left + right;
++                    self.stack.push(result);
++                }
++            }
++        }
++        Ok(())
++    }
+ }
+```
+
+`execute(...)`がプログラムカウンタが指す命令がなくなるまでループで次のことを行っている。
+
+1. コールスタックの一番上にあるフレームを取得する  
+2. pc（プログラムカウンタ）をインクリメントして、次の命令をフレームから取得する  
+3. 命令ごとの処理  
+   - `i32.add`という命令の場合は、スタックから値を2つ`pop`して、それらを足した結果をスタックに`push`する
+
+やっていることは前の章で示した擬似コードとほぼ同じである。
+
+続けて`local.get`と`end`命令も実装する。
+
+```diff:src/execution/runtime.rs
+diff --git a/src/execution/runtime.rs b/src/execution/runtime.rs
+index 6d090e9..5bae7fb 100644
+--- a/src/execution/runtime.rs
++++ b/src/execution/runtime.rs
+@@ -41,6 +41,12 @@ impl Runtime {
+             };
+ 
+             match inst {
++                Instruction::LocalGet(idx) => {
++                    let Some(value) = frame.locals.get(*idx as usize) else {
++                        bail!("not found local");
++                    };
++                    self.stack.push(value.clone());
++                }
+                 Instruction::I32Add => {
+                     let (Some(right), Some(left)) = (self.stack.pop(), self.stack.pop()) else {
+                         bail!("not found any value in the stack");
+```
+
+`local.get`命令はローカル変数の値を取得してスタックに`push`する命令である。
+`local.get`はオペランドを持っていて、これはどのローカル変数を値が取得するかを示す値で`frame.locals`のインデックス値である。
+
+```diff:src/execution/runtime.rs
+diff --git a/src/execution/runtime.rs b/src/execution/runtime.rs
+index 5bae7fb..ceaf3dc 100644
+--- a/src/execution/runtime.rs
++++ b/src/execution/runtime.rs
+@@ -41,6 +41,13 @@ impl Runtime {
+             };
+ 
+             match inst {
++                Instruction::End => {
++                    let Some(frame) = self.call_stack.pop() else { // 1
++                        bail!("not found frame");
++                    };
++                    let Frame { sp, arity, .. } = frame; // 2
++                    stack_unwind(&mut self.stack, sp, arity)?; // 3
++                }
+                 Instruction::LocalGet(idx) => {
+                     let Some(value) = frame.locals.get(*idx as usize) else {
+                         bail!("not found local");
+@@ -59,3 +66,16 @@ impl Runtime {
+         Ok(())
+     }
+ }
++
++pub fn stack_unwind(stack: &mut Vec<Value>, sp: usize, arity: usize) -> Result<()> {
++    if arity > 0 { // 3-1
++        let Some(value) = stack.pop() else {
++            bail!("not found return value");
++        };
++        stack.drain(sp..);
++        stack.push(value); // 3-2
++    } else {
++        stack.drain(sp..); // 3-3
++    }
++    Ok(())
++}
+```
+
+`end`命令は関数の実行終了を意味をしていて、この命令の場合は次の処理を行っている。
+
+1. コールスタックからフレームを`pop`する
+2. フレーム情報から`sp`（スタックポインタ）と`arity`（戻り値の数）を取得
+3. スタックを巻き戻す
+   1. 戻り値がある場合、スタックのから値を1つ`pop`してから`sp`までスタックを巻き戻す
+   2. `pop`した値をスタックに`push`する
+   3. 戻り値がない場合は単純に`sp`までスタックを巻き戻す
+
+`Runtime::execute(...)`のベース実装はこれで終わりなので、次に命令実行の前と後処理をする`Runtime::invoke_internal(...)`を実装する。
+
+```diff:src/execution/runtime.rs
+diff --git a/src/execution/runtime.rs b/src/execution/runtime.rs
+index ceaf3dc..3356b37 100644
+--- a/src/execution/runtime.rs
++++ b/src/execution/runtime.rs
+@@ -1,5 +1,8 @@
+-use super::{store::Store, value::Value};
+-use crate::binary::{instruction::Instruction, module::Module};
++use super::{
++    store::{InternalFuncInst, Store},
++    value::Value,
++};
++use crate::binary::{instruction::Instruction, module::Module, types::ValueType};
+ use anyhow::{bail, Result};
+ 
+ #[derive(Default)]
+@@ -28,6 +31,43 @@ impl Runtime {
+         })
+     }
+ 
++    fn invoke_internal(&mut self, func: InternalFuncInst) -> Result<Option<Value>> {
++        let bottom = self.stack.len() - func.func_type.params.len(); // 1
++        let mut locals = self.stack.split_off(bottom); // 2
++
++        for local in func.code.locals.iter() { // 3
++            match local {
++                ValueType::I32 => locals.push(Value::I32(0)),
++                ValueType::I64 => locals.push(Value::I64(0)),
++            }
++        }
++
++        let arity = func.func_type.results.len(); // 4
++
++        let frame = Frame {
++            pc: -1,
++            sp: self.stack.len(),
++            insts: func.code.body.clone(),
++            arity,
++            locals,
++        };
++
++        self.call_stack.push(frame); // 5
++
++        if let Err(e) = self.execute() { // 6
++            self.cleanup();
++            bail!("failed to execute instructions: {}", e)
++        };
++
++        if arity > 0 { // 7
++            let Some(value) = self.stack.pop() else {
++                bail!("not found return value")
++            };
++            return Ok(Some(value));
++        }
++        Ok(None)
++    }
++
+     fn execute(&mut self) -> Result<()> {
+         loop {
+             let Some(frame) = self.call_stack.last_mut() else {
+@@ -65,6 +105,11 @@ impl Runtime {
+         }
+         Ok(())
+     }
++
++    fn cleanup(&mut self) {
++        self.stack = vec![];
++        self.call_stack = vec![];
++    }
+ }
+ 
+ pub fn stack_unwind(stack: &mut Vec<Value>, sp: usize, arity: usize) -> Result<()> {
+```
+
+`Runtime::invoke_internal(...)`では次のことをやっている。
+
+1. 関数の引数の数を取得
+2. 引数の数だけスタックから値を`pop`する
+3. ローカル変数を初期化
+4. 関数の戻り値の数を取得
+5. フレームを作成して、`Runtime::call_stack`に`push`する
+6. `Runtime::execute()`を呼び出し関数を実行する
+7. 戻り値がある場合はスタックから`pop`して返す、ない場合は`None`を返す
+
+続けて`Runtime::invoke_internal(...)`を呼び出す`Runtime::call(...)`を実装して、呼び出す関数の指定と関数の引数を渡せるようにする。
+
+```diff:src/execution/runtime.rs
+diff --git a/src/execution/runtime.rs b/src/execution/runtime.rs
+index 3356b37..7cba836 100644
+--- a/src/execution/runtime.rs
++++ b/src/execution/runtime.rs
+@@ -1,5 +1,5 @@
+ use super::{
+-    store::{InternalFuncInst, Store},
++    store::{FuncInst, InternalFuncInst, Store},
+     value::Value,
+ };
+ use crate::binary::{instruction::Instruction, module::Module, types::ValueType};
+@@ -31,6 +31,18 @@ impl Runtime {
+         })
+     }
+ 
++    pub fn call(&mut self, idx: usize, args: Vec<Value>) -> Result<Option<Value>> {
++        let Some(func_inst) = self.store.funcs.get(idx) else { // 1
++            bail!("not found func")
++        };
++        for arg in args { // 2
++            self.stack.push(arg);
++        }
++        match func_inst {
++            FuncInst::Internal(func) => self.invoke_internal(func.clone()), // 3
++        }
++    }
++
+     fn invoke_internal(&mut self, func: InternalFuncInst) -> Result<Option<Value>> {
+         let bottom = self.stack.len() - func.func_type.params.len();
+         let mut locals = self.stack.split_off(bottom);
+```
+
+`Runtime::call(...)`では次の処理を行っている。
+
+1. 指定されたインデックスを使って`Store`が持っている`InternalFuncInst`（関数の実体）を取得
+2. 引数をスタックに`push`
+3. 1で取得した`InternalFuncInst`を`Runtime::invoke_internal(...)`に渡して実行して、結果を返す
+
+これで足し算の関数を実行できる`Wasm Runtime`ができたので、
+最後にテストを書いて正しく動くことを確認する。
+
+```diff:src/execution/runtime.rs
+diff --git a/src/execution/runtime.rs b/src/execution/runtime.rs
+index 7cba836..7fa35d2 100644
+--- a/src/execution/runtime.rs
++++ b/src/execution/runtime.rs
+@@ -136,3 +136,24 @@ pub fn stack_unwind(stack: &mut Vec<Value>, sp: usize, arity: usize) -> Result<(
+     }
+     Ok(())
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::Runtime;
++    use crate::execution::value::Value;
++    use anyhow::Result;
++
++    #[test]
++    fn execute_i32_add() -> Result<()> {
++        let wasm = wat::parse_file("src/fixtures/func_add.wat")?;
++        let mut runtime = Runtime::instantiate(wasm)?;
++        let tests = vec![(2, 3, 5), (10, 5, 15), (1, 1, 2)];
++
++        for (left, right, want) in tests {
++            let args = vec![Value::I32(left), Value::I32(right)];
++            let result = runtime.call(0, args)?;
++            assert_eq!(result, Some(Value::I32(want)));
++        }
++        Ok(())
++    }
++}
+```
+
+問題なければ次のとおり、テストが通る。
+
+```sh
+running 6 tests
+test binary::module::tests::decode_simplest_module ... ok
+test binary::module::tests::decode_func_param ... ok
+test binary::module::tests::decode_func_local ... ok
+test binary::module::tests::decode_simplest_func ... ok
+test binary::module::tests::decode_func_add ... ok
+test execution::runtime::tests::execute_i32_add ... ok
+```
+
+## まとめ
+本章では足し算ができる`Runtime`を実装した。
+これで雛形ができたので次章以降はさらに拡張して、最終的に`Hello World`を出力できるようにしていく。
 
 [^1]: https://www.w3.org/TR/wasm-core-1/#store%E2%91%A0
