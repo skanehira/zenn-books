@@ -218,7 +218,10 @@ test execution::runtime::tests::execute_i32_add ... ok
 test binary::module::tests::decode_func_add ... ok
 ```
 
-### 実行する実装
+### 関数実行の実装
+
+セクションのデコードができたので次は関数名を指定して実行できるように実装する。
+
 
 ## インポーポした関数を実行する
 
