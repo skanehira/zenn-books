@@ -595,7 +595,7 @@ test execution::runtime::tests::execute_i32_add ... ok
 ```
 
 ## まとめ
-本章では足し算ができる`Runtime`を実装した。
+本章では足し算ができる`Runtime`を実装して動いたところまで確認できた。
 これで雛形ができたので次章以降はさらに拡張して、最終的に`Hello World`を出力できるようにしていく。
 
 [^1]: https://www.w3.org/TR/wasm-core-1/#store%E2%91%A0

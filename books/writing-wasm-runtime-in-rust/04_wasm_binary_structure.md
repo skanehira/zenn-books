@@ -340,7 +340,7 @@ Runtime側は基本的にエクスポートした関数しか呼ぶことがで�
 0000013: 09                   ; section size
 0000014: 01                   ; num exports
 0000015: 05                   ; string length
-0000016: 6475 6d6d 79        dummy  ; export name
+0000016: 6475 6d6d 79         ; export name (dummy)
 000001b: 00                   ; export kind
 000001c: 00                   ; export func index
 ```
