@@ -1,5 +1,5 @@
 ---
-title: "Runtimeの実装 その1"
+title: "Runtimeの実装 ~ 関数の実行まで ~"
 ---
 
 本章では次のWATを実行できるようRuntimeを実装していく。
