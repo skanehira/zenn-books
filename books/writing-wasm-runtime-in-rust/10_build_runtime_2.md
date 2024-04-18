@@ -570,7 +570,7 @@ test execution::runtime::tests::execute_i32_add ... ok
 ```
 
 ### `call`命令処理の実装
-これでデコードの処理は実装できたので、次は命令の処理を実装していく。
+デコードの処理は実装できたので、次は命令の処理を実装していく。
 
 ```diff:src/execution/runtime.rs
 diff --git a/src/execution/runtime.rs b/src/execution/runtime.rs
