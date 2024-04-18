@@ -408,6 +408,7 @@ test execution::runtime::tests::not_found_export_function ... ok
 )
 ```
 
+### `call`命令のデコード実装
 まず関数呼び出し命令をデコードできるように実装する。
 
 ```diff:src/binary/opcode.rs
@@ -568,6 +569,7 @@ test execution::runtime::tests::not_found_export_function ... ok
 test execution::runtime::tests::execute_i32_add ... ok
 ```
 
+### `call`命令処理の実装
 これでデコードの処理は実装できたので、次は命令の処理を実装していく。
 
 ```diff:src/execution/runtime.rs
