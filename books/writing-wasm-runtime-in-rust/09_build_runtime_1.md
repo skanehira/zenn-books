@@ -38,7 +38,7 @@ title: "Runtimeの実装 ~ 関数の実行まで ~"
 それぞれ次のように実装する。
 
 ```rust:src/execution/value.rs
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Value {
     I32(i32),
     I64(i64),
@@ -363,7 +363,7 @@ index 6d090e9..5bae7fb 100644
 +                    let Some(value) = frame.locals.get(*idx as usize) else {
 +                        bail!("not found local");
 +                    };
-+                    self.stack.push(value.clone());
++                    self.stack.push(*value);
 +                }
                  Instruction::I32Add => {
                      let (Some(right), Some(left)) = (self.stack.pop(), self.stack.pop()) else {
