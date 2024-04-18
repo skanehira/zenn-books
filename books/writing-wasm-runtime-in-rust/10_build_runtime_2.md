@@ -392,6 +392,7 @@ test execution::runtime::tests::not_found_export_function ... ok
 もちろん関数自身を再帰的に呼び出すことも可能だ。
 
 本節では次の関数呼び出しができるように実装をしていく。
+`call_doubler`関数は引数を一つ受け取り、それを`double`関数に渡して2倍にして返すということをしている。
 
 ```wat:src/fixtures/func_call.wat
 (module
