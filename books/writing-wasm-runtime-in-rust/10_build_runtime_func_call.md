@@ -665,4 +665,4 @@ test binary::module::tests::decode_simplest_func ... ok
 
 ## まとめ
 本章では関数の呼び出しができるように実装した。
-次章では`"Hello, World"`を出力できるところまで実装する。
+次章ではインポートした外部関数を実行できるように実装していく。

@@ -1,5 +1,5 @@
 ---
-title: "Wasmの入門"
+title: "Wasm入門"
 ---
 
 本章はWAT（WebAssembly Text Format）というWasmバイナリをコンパイルできる言語を使って、実際にWasmを動かすことを体験していく。
