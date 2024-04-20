@@ -39,7 +39,7 @@ index ce14757..99678c4 100644
 ```
 
 `Export Section`のデコードを実装していないため現時点ではテストが失敗するので、それを実装する。
-バイナリ構造に関してはすでに[Wasmの入門](https://zenn.dev/skanehira/books/writing-wasm-runtime-in-rust/viewer/04_wasm_binary_structure)で解説したのでそちらを参照してほしい。
+バイナリ構造に関してはすでに[Wasmバイナリの構造](https://zenn.dev/skanehira/books/writing-wasm-runtime-in-rust/viewer/04_wasm_binary_structure)の章で解説したのでそちらを参照してほしい。
 
 まずエクスポートを表現した型を定義する。
 
@@ -373,7 +373,7 @@ index 1885646..acc48cf 100644
 +    #[test]
 +    fn not_found_export_function() -> Result<()> {
 +        let wasm = wat::parse_file("src/fixtures/func_add.wat")?;
-+        let mut runtime = Runtime::instantiate(wasm).unwrap();
++        let mut runtime = Runtime::instantiate(wasm)?;
 +        let result = runtime.call("fooooo", vec![]);
 +        assert!(result.is_err());
 +        Ok(())

@@ -12,6 +12,10 @@ $ rustc --version
 rustc 1.77.2 (25ef9e3d8 2024-04-09)
 ```
 
+また本書ように作成した`Wasm Runtime`の実装は次のリポジトリにおいてあるので、もし分かりづらい部分があれば直接コードを参照してほしい。
+
+https://github.com/skanehira/tiny-wasm-runtime
+
 ## 準備
 早速Rustのプロジェクトを作成して、必要なクレートを導入しよう。
 

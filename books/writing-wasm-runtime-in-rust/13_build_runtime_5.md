@@ -1,533 +1,583 @@
 ---
-title: "Runtimeの実装 ~ \"Hello, World!\"出力まで ~"
+title: "Runtimeの実装 ~ メモリ初期化まで ~"
 ---
 
-本章では`WASI`の`fd_write`関数を実装して、`Hello, World`を出力する機能を実装する。
+本章では`Wasm Runtime`が持つメモリを初期化してデータを配置する機能を実装する。
+最終的には次のWATで`Wasm Runtime`のメモリを初期化できるようになる。
 
-最終的には次のWATを実行できるようになる。
-
-```WAT:src/fixtures/hello_world.wat
+```WAT:src/fixtures/memory.wat
 (module
-  (import "wasi_snapshot_preview1" "fd_write"
-    (func $fd_write (param i32 i32 i32 i32) (result i32))
-  )
   (memory 1)
-  (data (i32.const 0) "Hello, World!\n")
-
-  (func $hello_world (result i32)
-    (local $iovec i32)
-
-    (i32.store (i32.const 16) (i32.const 0))
-    (i32.store (i32.const 20) (i32.const 14))
-
-    (local.set $iovec (i32.const 16))
-
-    (call $fd_write
-      (i32.const 1)
-      (local.get $iovec)
-      (i32.const 1)
-      (i32.const 24)
-    )
-  )
-  (export "_start" (func $hello_world))
+  (data (i32.const 0) "hello")
+  (data (i32.const 5) "world")
 )
 ```
 
-## 必要な命令の実装
+## `Memory Section`のデコード実装
 
-今回のWATを実行するのに以下の命令を処理できるようにする必要があるので、まずそれらを実装していく。
+まず`Memory Section`をデコードできるようにしていく。
+`Memory Section`は`Wasm Runtime`初期化時にどれくらいメモリを確保するかの情報を持っているので、このセクションをデコードすることでメモリを確保できるようになる。
 
-| 命令        | 概要                                                 |
-|-------------|------------------------------------------------------|
-| `local.set` | スタックから値を1つ`pop`してローカル変数に`push`する |
-| `i32.const` | オペランドの値をスタックに`push`する                 |
-| `i32.store` | スタックから値を`pop`してメモリに書き込む            |
+詳細なバイナリ構造は[Wasmバイナリの構造](https://zenn.dev/skanehira/books/writing-wasm-runtime-in-rust/viewer/04_wasm_binary_structure#memory-section)の章を参照。
 
-### `local.set`の実装
+最初にメモリの情報を持つ`Memory`を定義する。
 
-`local.set`命令ではオペランドを持っていて、ローカル変数のどの場所に値を配置するかを指定できるようになっている。
-
-```diff:src/binary/opcode.rs
-diff --git a/src/binary/opcode.rs b/src/binary/opcode.rs
-index 5d0a2b7..55d30c1 100644
---- a/src/binary/opcode.rs
-+++ b/src/binary/opcode.rs
-@@ -4,6 +4,7 @@ use num_derive::FromPrimitive;
- pub enum Opcode {
-     End = 0x0B,
-     LocalGet = 0x20,
-+    LocalSet = 0x21,
-     I32Add = 0x6A,
-     Call = 0x10,
+```diff:/src/binary/types.rs
+diff --git a/src/binary/types.rs b/src/binary/types.rs
+index 64912f8..3d620f3 100644
+--- a/src/binary/types.rs
++++ b/src/binary/types.rs
+@@ -48,3 +48,14 @@ pub struct Import {
+     pub field: String,
+     pub desc: ImportDesc,
  }
-```
-
-```diff:src/binary/instruction.rs
-diff --git a/src/binary/instruction.rs b/src/binary/instruction.rs
-index c9c6584..81d0d95 100644
---- a/src/binary/instruction.rs
-+++ b/src/binary/instruction.rs
-@@ -2,6 +2,7 @@
- pub enum Instruction {
-     End,
-     LocalGet(u32),
-+    LocalSet(u32),
-     I32Add,
-     Call(u32),
- }
-```
-
-```diff:src/binary/module.rs
-diff --git a/src/binary/module.rs b/src/binary/module.rs
-index 40f20fd..8426948 100644
---- a/src/binary/module.rs
-+++ b/src/binary/module.rs
-@@ -217,6 +217,10 @@ fn decode_instructions(input: &[u8]) -> IResult<&[u8], Instruction> {
-             let (rest, idx) = leb128_u32(input)?;
-             (rest, Instruction::LocalGet(idx))
-         }
-+        Opcode::LocalSet => {
-+            let (rest, idx) = leb128_u32(input)?;
-+            (rest, Instruction::LocalSet(idx))
-+        }
-         Opcode::I32Add => (input, Instruction::I32Add),
-         Opcode::End => (input, Instruction::End),
-         Opcode::Call => {
-```
-
-```diff:src/binary/module.rs
-diff --git a/src/execution/runtime.rs b/src/execution/runtime.rs
-index 3c492bc..c52de7b 100644
---- a/src/execution/runtime.rs
-+++ b/src/execution/runtime.rs
-@@ -154,6 +154,13 @@ impl Runtime {
-                     };
-                     self.stack.push(*value);
-                 }
-+                Instruction::LocalSet(idx) => {
-+                    let Some(value) = self.stack.pop() else {
-+                        bail!("not found value in the stack");
-+                    };
-+                    let idx = *idx as usize;
-+                    frame.locals[idx] = value;
-+                }
-                 Instruction::I32Add => {
-                     let (Some(right), Some(left)) = (self.stack.pop(), self.stack.pop()) else {
-                         bail!("not found any value in the stack");
-```
-
-やっていることはシンプルで、指定された`frame.locals`のインデックスに`pop`した値を配置する。
-
-### `i32.const`の実装
-
-`i32.const`はオペランドに値を持っていて、この値をスタックに`push`する。
-
-```diff:src/binary/opcode.rs
-diff --git a/src/binary/opcode.rs b/src/binary/opcode.rs
-index 55d30c1..1eb29fd 100644
---- a/src/binary/opcode.rs
-+++ b/src/binary/opcode.rs
-@@ -5,6 +5,7 @@ pub enum Opcode {
-     End = 0x0B,
-     LocalGet = 0x20,
-     LocalSet = 0x21,
-+    I32Const = 0x41,
-     I32Add = 0x6A,
-     Call = 0x10,
- }
-```
-
-```diff:src/binary/instruction.rs
-diff --git a/src/binary/instruction.rs b/src/binary/instruction.rs
-index 81d0d95..0e392c5 100644
---- a/src/binary/instruction.rs
-+++ b/src/binary/instruction.rs
-@@ -3,6 +3,7 @@ pub enum Instruction {
-     End,
-     LocalGet(u32),
-     LocalSet(u32),
-+    I32Const(i32),
-     I32Add,
-     Call(u32),
- }
-```
-
-```diff:src/binary/module.rs
-diff --git a/src/binary/module.rs b/src/binary/module.rs
-index 8426948..26b56b3 100644
---- a/src/binary/module.rs
-+++ b/src/binary/module.rs
-@@ -14,7 +14,7 @@ use nom::{
-     sequence::pair,
-     IResult,
- };
--use nom_leb128::leb128_u32;
-+use nom_leb128::{leb128_i32, leb128_u32};
- use num_traits::FromPrimitive as _;
- 
- #[derive(Debug, PartialEq, Eq)]
-@@ -221,6 +221,10 @@ fn decode_instructions(input: &[u8]) -> IResult<&[u8], Instruction> {
-             let (rest, idx) = leb128_u32(input)?;
-             (rest, Instruction::LocalSet(idx))
-         }
-+        Opcode::I32Const => {
-+            let (rest, value) = leb128_i32(input)?;
-+            (rest, Instruction::I32Const(value))
-+        }
-         Opcode::I32Add => (input, Instruction::I32Add),
-         Opcode::End => (input, Instruction::End),
-         Opcode::Call => {
-```
-
-```diff:src/execution/runtime.rs
-diff --git a/src/execution/runtime.rs b/src/execution/runtime.rs
-index c52de7b..9044e25 100644
---- a/src/execution/runtime.rs
-+++ b/src/execution/runtime.rs
-@@ -161,6 +161,7 @@ impl Runtime {
-                     let idx = *idx as usize;
-                     frame.locals[idx] = value;
-                 }
-+                Instruction::I32Const(value) => self.stack.push(Value::I32(*value)),
-                 Instruction::I32Add => {
-                     let (Some(right), Some(left)) = (self.stack.pop(), self.stack.pop()) else {
-                         bail!("not found any value in the stack");
-```
-
-`local.set`と組み合わせたテスト追加して実装が問題ないことを確認する。
-
-```wat:src/fixtures/i32_const.wat
-(module
-  (func $i32_const (result i32)
-    (i32.const 42)
-  )
-  (export "i32_const" (func $i32_const))
-)
-```
-
-```wat:src/fixtures/local_set.wat
-(module
-  (func $local_set (result i32)
-    (local $x i32)
-    (local.set $x (i32.const 42))
-    (local.get 0)
-  )
-  (export "local_set" (func $local_set))
-)
-```
-
-```diff:src/execution/runtime.rs
-diff --git a/src/execution/runtime.rs b/src/execution/runtime.rs
-index 9044e25..1b18d77 100644
---- a/src/execution/runtime.rs
-+++ b/src/execution/runtime.rs
-@@ -277,4 +277,22 @@ mod tests {
-         assert!(result.is_err());
-         Ok(())
-     }
-+    
-+    #[test]
-+    fn i32_const() -> Result<()> {
-+        let wasm = wat::parse_file("src/fixtures/i32_const.wat")?;
-+        let mut runtime = Runtime::instantiate(wasm)?;
-+        let result = runtime.call("i32_const", vec![])?;
-+        assert_eq!(result, Some(Value::I32(42)));
-+        Ok(())
-+    }
 +
-+    #[test]
-+    fn local_set() -> Result<()> {
-+        let wasm = wat::parse_file("src/fixtures/local_set.wat")?;
-+        let mut runtime = Runtime::instantiate(wasm)?;
-+        let result = runtime.call("local_set", vec![])?;
-+        assert_eq!(result, Some(Value::I32(42)));
-+        Ok(())
-+    }
- }
-```
-
-### `i32.store`の実装
-
-`i32.store`はスタックから値を`pop`して、指定したメモリアドレスに値を書き込む命令となっている。
-
-```diff:src/binary/opcode.rs
-diff --git a/src/binary/opcode.rs b/src/binary/opcode.rs
-index 1eb29fd..1e0931b 100644
---- a/src/binary/opcode.rs
-+++ b/src/binary/opcode.rs
-@@ -5,6 +5,7 @@ pub enum Opcode {
-     End = 0x0B,
-     LocalGet = 0x20,
-     LocalSet = 0x21,
-+    I32Store = 0x36,
-     I32Const = 0x41,
-     I32Add = 0x6A,
-     Call = 0x10,
-```
-
-```diff:src/binary/instruction.rs
-diff --git a/src/binary/instruction.rs b/src/binary/instruction.rs
-index 0e392c5..326db0a 100644
---- a/src/binary/instruction.rs
-+++ b/src/binary/instruction.rs
-@@ -3,6 +3,7 @@ pub enum Instruction {
-     End,
-     LocalGet(u32),
-     LocalSet(u32),
-+    I32Store { align: u32, offset: u32 },
-     I32Const(i32),
-     I32Add,
-     Call(u32),
-```
-
-```diff:src/binary/module.rs
-diff --git a/src/binary/module.rs b/src/binary/module.rs
-index 26b56b3..f55db9b 100644
---- a/src/binary/module.rs
-+++ b/src/binary/module.rs
-@@ -221,6 +221,11 @@ fn decode_instructions(input: &[u8]) -> IResult<&[u8], Instruction> {
-             let (rest, idx) = leb128_u32(input)?;
-             (rest, Instruction::LocalSet(idx))
-         }
-+        Opcode::I32Store => {
-+            let (rest, align) = leb128_u32(input)?;
-+            let (rest, offset) = leb128_u32(rest)?;
-+            (rest, Instruction::I32Store { align, offset })
-+        }
-         Opcode::I32Const => {
-             let (rest, value) = leb128_i32(input)?;
-             (rest, Instruction::I32Const(value))
-```
-
-```diff:src/execution/runtime.rs
-diff --git a/src/execution/runtime.rs b/src/execution/runtime.rs
-index bcb8288..b5b7417 100644
---- a/src/execution/runtime.rs
-+++ b/src/execution/runtime.rs
-@@ -183,6 +183,7 @@ impl Runtime {
-                         }
-                     }
-                 }
-+                _ => todo!(), // コンパイルエラーを回避するため命令処理は一旦TODO
-             }
-         }
-         Ok(())
-```
-
-`i32.store`のオペランドはオフセットとアライメントの値になっていて、この`アドレス + オフセット`が実際に値を書き込む場所になる。
-アライメントはメモリ境界チェックのために必要だが本書のスコープ外なので、デコードはするが特に使わない。
-
-これで命令のデコードができるようになったので、テストを追加して実装が問題ないことを確認する。
-
-```diff:src/execution/runtime.rs
-diff --git a/src/binary/module.rs b/src/binary/module.rs
-index f55db9b..c2a8c39 100644
---- a/src/binary/module.rs
-+++ b/src/binary/module.rs
-@@ -604,4 +604,35 @@ mod tests {
-         }
-         Ok(())
-     }
-+
-+    #[test]
-+    fn decode_i32_store() -> Result<()> {
-+        let wasm = wat::parse_str(
-+            "(module (func (i32.store offset=4 (i32.const 4))))",
-+        )?;
-+        let module = Module::new(&wasm)?;
-+        assert_eq!(
-+            module,
-+            Module {
-+                type_section: Some(vec![FuncType {
-+                    params: vec![],
-+                    results: vec![],
-+                }]),
-+                function_section: Some(vec![0]),
-+                code_section: Some(vec![Function {
-+                    locals: vec![],
-+                    code: vec![
-+                        Instruction::I32Const(4),
-+                        Instruction::I32Store {
-+                            align: 2,
-+                            offset: 4
-+                        },
-+                        Instruction::End
-+                    ],
-+                }]),
-+                ..Default::default()
-+            }
-+        );
-+        Ok(())
-+    }
- }
-```
-
-```sh
-running 18 tests
-test binary::module::tests::decode_simplest_module ... ok
-test binary::module::tests::decode_simplest_func ... ok
-test binary::module::tests::decode_func_param ... ok
-test binary::module::tests::decode_memory ... ok
-test binary::module::tests::decode_func_add ... ok
-test binary::module::tests::decode_i32_store ... ok
-test binary::module::tests::decode_func_call ... ok
-test binary::module::tests::decode_import ... ok
-test binary::module::tests::decode_func_local ... ok
-test binary::module::tests::decode_data ... ok
-test execution::runtime::tests::call_imported_func ... ok
-test execution::runtime::tests::execute_i32_add ... ok
-test execution::runtime::tests::i32_const ... ok
-test execution::runtime::tests::not_found_export_function ... ok
-test execution::runtime::tests::func_call ... ok
-test execution::runtime::tests::local_set ... ok
-test execution::runtime::tests::not_found_imported_func ... ok
-test execution::store::test::init_memory ... ok
-```
-
-続けて`i32.store`の命令を実装していく。
-
-```diff
-diff --git a/src/execution/value.rs b/src/execution/value.rs
-index b24fd25..21d364d 100644
---- a/src/execution/value.rs
-+++ b/src/execution/value.rs
-@@ -10,6 +10,15 @@ impl From<i32> for Value {
-     }
- }
- 
-+impl From<Value> for i32 {
-+    fn from(value: Value) -> Self {
-+        match value {
-+            Value::I32(value) => value,
-+            _ => panic!("type mismatch"),
-+        }
-+    }
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct Limits {
++    pub min: u32,
++    pub max: Option<u32>,
 +}
 +
- impl From<i64> for Value {
-     fn from(value: i64) -> Self {
-         Value::I64(value)
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct Memory {
++    pub limits: Limits,
++}
 ```
 
-```diff
-diff --git a/src/execution/runtime.rs b/src/execution/runtime.rs
-index b5b7417..3584fdf 100644
---- a/src/execution/runtime.rs
-+++ b/src/execution/runtime.rs
-@@ -1,3 +1,5 @@
-+use std::mem::size_of;
+続けて、デコード処理を実装する。
+
+```diff:src/binary/module.rs
+diff --git a/src/binary/module.rs b/src/binary/module.rs
+index 2a8dbfa..d7b56ba 100644
+--- a/src/binary/module.rs
++++ b/src/binary/module.rs
+@@ -2,7 +2,9 @@ use super::{
+     instruction::Instruction,
+     opcode::Opcode,
+     section::{Function, SectionCode},
+-    types::{Export, ExportDesc, FuncType, FunctionLocal, Import, ImportDesc, ValueType},
++    types::{
++        Export, ExportDesc, FuncType, FunctionLocal, Import, ImportDesc, Limits, Memory, ValueType,
++    },
+ };
+ use nom::{
+     bytes::complete::{tag, take},
+@@ -18,6 +20,7 @@ use num_traits::FromPrimitive as _;
+ pub struct Module {
+     pub magic: String,
+     pub version: u32,
++    pub memory_section: Option<Vec<Memory>>,
+     pub type_section: Option<Vec<FuncType>>,
+     pub function_section: Option<Vec<u32>>,
+     pub code_section: Option<Vec<Function>>,
+@@ -30,6 +33,7 @@ impl Default for Module {
+         Self {
+             magic: "\0asm".to_string(),
+             version: 1,
++            memory_section: None,
+             type_section: None,
+             function_section: None,
+             code_section: None,
+@@ -67,6 +71,10 @@ impl Module {
+                         SectionCode::Custom => {
+                             // skip
+                         }
++                        SectionCode::Memory => {
++                            let (_, memory) = decode_memory_section(section_contents)?;
++                            module.memory_section = Some(vec![memory]);
++                        }
+                         SectionCode::Type => {
+                             let (_, types) = decode_type_section(section_contents)?;
+                             module.type_section = Some(types);
+@@ -260,6 +268,24 @@ fn decode_import_section(input: &[u8]) -> IResult<&[u8], Vec<Import>> {
+     Ok((&[], imports))
+ }
+ 
++fn decode_memory_section(input: &[u8]) -> IResult<&[u8], Memory> {
++    let (input, _) = leb128_u32(input)?; // 1
++    let (_, limits) = decode_limits(input)?;
++    Ok((input, Memory { limits }))
++}
 +
- use super::{
-     import::Import,
-     store::{ExternalFuncInst, FuncInst, InternalFuncInst, Store},
-@@ -161,6 +163,22 @@ impl Runtime {
-                     let idx = *idx as usize;
-                     frame.locals[idx] = value;
-                 }
-+                Instruction::I32Store { align: _, offset } => {
-+                    let (Some(value), Some(addr)) = (self.stack.pop(), self.stack.pop()) else { // 1
-+                        bail!("not found any value in the stack");
-+                    };
-+                    let addr = Into::<i32>::into(addr) as usize;
-+                    let offset = (*offset) as usize;
-+                    let at = addr + offset; // 2
-+                    let end = at + size_of::<i32>(); // 3
-+                    let memory = self
-+                        .store
-+                        .memories
-+                        .get_mut(0)
-+                        .ok_or(anyhow!("not found memory"))?;
-+                    let value: i32 = value.into();
-+                    memory.data[at..end].copy_from_slice(&value.to_le_bytes()); // 4
-+                }
-                 Instruction::I32Const(value) => self.stack.push(Value::I32(*value)),
-                 Instruction::I32Add => {
-                     let (Some(right), Some(left)) = (self.stack.pop(), self.stack.pop()) else {
++fn decode_limits(input: &[u8]) -> IResult<&[u8], Limits> {
++    let (input, (flags, min)) = pair(leb128_u32, leb128_u32)(input)?; // 2
++    let max = if flags == 0 { // 3
++        None
++    } else {
++        let (_, max) = leb128_u32(input)?;
++        Some(max)
++    };
++
++    Ok((input, Limits { min, max }))
++}
++
+ fn decode_name(input: &[u8]) -> IResult<&[u8], String> {
+     let (input, size) = leb128_u32(input)?;
+     let (input, name) = take(size)(input)?;
 ```
 
-命令の処理では次のことをやっている。
+デコード処理は次のことをやっている。
 
-1. スタックからメモリに書き込む値とアドレスを取得
-2. 1のアドレス + オフセットで書き込み先のインデックスを取得
-3. メモリへの書き込み範囲を算出する
-4. 値をリトリエンディアンのバイト列に変換して、2と3で計算した範囲にデータをコピー
+1. メモリの数を取得
+    - version 1ではメモリは1つしか扱えないので、このまま読み飛ばしている
+2. `flags`と`min`を読み取る
+    - `flags`はページ数の上限指定があるかどうかを確認するための値
+    - `min`は初期のページ数
+3. `flags`が`0`の場合はページ数上限の指定がないことを意味し、`1`の場合は上限があるのでその値を読み取る
 
-最後にテストを追加して実装に問題ないことを確認する。
+これでメモリ確保に必要な情報が揃ったので、次`Runtime`でメモリを持てるように実装する。
 
-```wat:src/fixtures/i32_store.wat
-(module
-  (memory 1)
-  (func $i32_store
-    (i32.const 0)
-    (i32.const 42)
-    (i32.store)
-  )
-  (export "i32_store" (func $i32_store))
-)
+```diff:src/execution/store.rs
+diff --git a/src/execution/store.rs b/src/execution/store.rs
+index 5666a39..efadc19 100644
+--- a/src/execution/store.rs
++++ b/src/execution/store.rs
+@@ -7,6 +7,8 @@ use crate::binary::{
+ };
+ use anyhow::{bail, Result};
+ 
++pub const PAGE_SIZE: u32 = 65536; // 64Ki
++
+ #[derive(Clone)]
+ pub struct Func {
+     pub locals: Vec<ValueType>,
+@@ -42,10 +44,17 @@ pub struct ModuleInst {
+     pub exports: HashMap<String, ExportInst>,
+ }
+ 
++#[derive(Default, Debug, Clone)]
++pub struct MemoryInst {
++    pub data: Vec<u8>,
++    pub max: Option<u32>,
++}
++
+ #[derive(Default)]
+ pub struct Store {
+     pub funcs: Vec<FuncInst>,
+     pub module: ModuleInst,
++    pub memories: Vec<MemoryInst>,
+ }
+ 
+ impl Store {
+@@ -56,6 +65,7 @@ impl Store {
+         };
+ 
+         let mut funcs = vec![];
++        let mut memories = vec![];
+ 
+         if let Some(ref import_section) = module.import_section {
+             for import in import_section {
+@@ -125,8 +135,20 @@ impl Store {
+         };
+         let module_inst = ModuleInst { exports };
+ 
++        if let Some(ref sections) = module.memory_section {
++            for memory in sections {
++                let min = memory.limits.min * PAGE_SIZE; // 1
++                let memory = MemoryInst {
++                    data: vec![0; min as usize], // 2
++                    max: memory.limits.max,
++                };
++                memories.push(memory);
++            }
++        }
++
+         Ok(Self {
+             funcs,
++            memories,
+             module: module_inst,
+         })
+     }
 ```
 
-`i32_store.wat`ではアドレスが`0`で値が`42`、オフセットは`0`なので最終的にメモリの`0`番地に対して`42`を書き込むことになる。
-そのためテストでは`0`番地が`42`になっていることを確認する。
+`MemoryInst`はメモリの実態で、`data`が実際に`Wasm Runtime`が操作できるメモリ領域となっている。
+見ての通り、ただの可変長配列である。
 
-```diff:src/execution/runtime.rs
-diff --git a/src/execution/runtime.rs b/src/execution/runtime.rs
-index 19b766c..79aa5e5 100644
---- a/src/execution/runtime.rs
-+++ b/src/execution/runtime.rs
-@@ -313,4 +313,14 @@ mod tests {
-         assert_eq!(result, Some(Value::I32(42)));
+`Wasm Runtime`が操作できるメモリは`MemoryInst::data`だけなので、他のプログラムとメモリ領域が被ってしまうことは発生しない。
+セキュアと言われる理由の一つである。
+
+メモリ確保の処理は次のことをやっている。
+
+1. `memory.limits.min`はページ数なので、それとページサイズを書けて確保する最小のメモリ量を計算
+2. 1で計算したサイズ分の配列を0埋めで初期化する
+
+ちなみに、今回実装する範囲では特に使わないが`memory.limits.max`はメモリの上限チェックに使用する。
+`Wasm`では`memory.grow`命令を使ってメモリを増やせるが、増やせる上限を超えているかどうかをチェックするために使用する。
+
+続けてテストで問題なくデコードできることを確認する。
+
+```diff:src/binary/module.rs
+diff --git a/src/binary/module.rs b/src/binary/module.rs
+index 935654b..3e59d35 100644
+--- a/src/binary/module.rs
++++ b/src/binary/module.rs
+@@ -301,7 +301,10 @@ mod tests {
+         instruction::Instruction,
+         module::Module,
+         section::Function,
+-        types::{Export, ExportDesc, FuncType, FunctionLocal, Import, ImportDesc, ValueType},
++        types::{
++            Export, ExportDesc, FuncType, FunctionLocal, Import, ImportDesc, Limits, Memory,
++            ValueType,
++        },
+     };
+     use anyhow::Result;
+ 
+@@ -488,4 +491,29 @@ mod tests {
+         );
          Ok(())
      }
 +
 +    #[test]
-+    fn i32_store() -> Result<()> {
-+        let wasm = wat::parse_file("src/fixtures/i32_store.wat")?;
-+        let mut runtime = Runtime::instantiate(wasm)?;
-+        runtime.call("i32_store", vec![])?;
-+        let memory = &runtime.store.memories[0].data;
-+        assert_eq!(memory[0], 42);
++    fn decode_memory() -> Result<()> {
++        let tests = vec![
++            ("(module (memory 1))", Limits { min: 1, max: None }),
++            (
++                "(module (memory 1 2))",
++                Limits {
++                    min: 1,
++                    max: Some(2),
++                },
++            ),
++        ];
++        for (wasm, limits) in tests {
++            let module = Module::new(&wat::parse_str(wasm)?)?;
++            assert_eq!(
++                module,
++                Module {
++                    memory_section: Some(vec![Memory { limits }]),
++                    ..Default::default()
++                }
++            );
++        }
 +        Ok(())
 +    }
  }
 ```
 
 ```sh
-running 19 tests
+running 13 tests
+test binary::module::tests::decode_simplest_module ... ok
+test binary::module::tests::decode_memory ... ok
 test binary::module::tests::decode_func_param ... ok
 test binary::module::tests::decode_simplest_func ... ok
+test binary::module::tests::decode_func_call ... ok
+test execution::runtime::tests::not_found_export_function ... ok
+test binary::module::tests::decode_func_add ... ok
+test execution::runtime::tests::execute_i32_add ... ok
+test execution::runtime::tests::func_call ... ok
+test binary::module::tests::decode_func_local ... ok
+test binary::module::tests::decode_import ... ok
+test execution::runtime::tests::not_found_imported_func ... ok
+test execution::runtime::tests::call_imported_func ... ok
+```
+
+## `Data Section`のデコード実装
+
+`Data Section`は`Runtime`でメモリを確保したあとに配置するデータが定義されている領域なので、それをデコードしてメモリに配置する実装をしていく。
+詳細なバイナリ構造は[Wasmバイナリの構造](https://zenn.dev/skanehira/books/writing-wasm-runtime-in-rust/viewer/04_wasm_binary_structure#data-section)を参照。
+
+まず次の構造体を用意する。
+
+```diff:src/binary/types.rs
+diff --git a/src/binary/types.rs b/src/binary/types.rs
+index 3d620f3..bff2cd4 100644
+--- a/src/binary/types.rs
++++ b/src/binary/types.rs
+@@ -59,3 +59,10 @@ pub struct Limits {
+ pub struct Memory {
+     pub limits: Limits,
+ }
++
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct Data {
++    pub memory_index: u32,
++    pub offset: u32,
++    pub init: Vec<u8>,
++}
+```
+
+それぞれのフィールドは次のようになっている。
+
+- `memory_index`: データの配置先のメモリを指している
+  - version 1ではメモリは1つしか扱えないので基本的に`0`になる
+- `offset`: 配置するデータのメモリ上の先頭位置、`0`の場合は`0`バイト目から配置する
+- `init`: 配置するデータのバイト列そのもの
+
+続けてデコード処理を実装する。
+
+```diff:src/binary/module.rs
+diff --git a/src/binary/module.rs b/src/binary/module.rs
+index 3e59d35..46db8dc 100644
+--- a/src/binary/module.rs
++++ b/src/binary/module.rs
+@@ -3,7 +3,8 @@ use super::{
+     opcode::Opcode,
+     section::{Function, SectionCode},
+     types::{
+-        Export, ExportDesc, FuncType, FunctionLocal, Import, ImportDesc, Limits, Memory, ValueType,
++        Data, Export, ExportDesc, FuncType, FunctionLocal, Import, ImportDesc, Limits, Memory,
++        ValueType,
+     },
+ };
+ use nom::{
+@@ -21,6 +22,7 @@ pub struct Module {
+     pub magic: String,
+     pub version: u32,
+     pub memory_section: Option<Vec<Memory>>,
++    pub data_section: Option<Vec<Data>>,
+     pub type_section: Option<Vec<FuncType>>,
+     pub function_section: Option<Vec<u32>>,
+     pub code_section: Option<Vec<Function>>,
+@@ -34,6 +36,7 @@ impl Default for Module {
+             magic: "\0asm".to_string(),
+             version: 1,
+             memory_section: None,
++            data_section: None,
+             type_section: None,
+             function_section: None,
+             code_section: None,
+@@ -75,6 +78,10 @@ impl Module {
+                             let (_, memory) = decode_memory_section(section_contents)?;
+                             module.memory_section = Some(vec![memory]);
+                         }
++                        SectionCode::Data => {
++                            let (_, data) = deocde_data_section(section_contents)?;
++                            module.data_section = Some(data);
++                        }
+                         SectionCode::Type => {
+                             let (_, types) = decode_type_section(section_contents)?;
+                             module.type_section = Some(types);
+@@ -95,7 +102,6 @@ impl Module {
+                             let (_, imports) = decode_import_section(section_contents)?;
+                             module.import_section = Some(imports);
+                         }
+-                        _ => todo!(),
+                     };
+ 
+                     remaining = rest;
+@@ -286,6 +292,31 @@ fn decode_limits(input: &[u8]) -> IResult<&[u8], Limits> {
+     Ok((input, Limits { min, max }))
+ }
+ 
++fn decode_expr(input: &[u8]) -> IResult<&[u8], u32> {
++    let (input, _) = leb128_u32(input)?;
++    let (input, offset) = leb128_u32(input)?;
++    let (input, _) = leb128_u32(input)?;
++    Ok((input, offset))
++}
++
++fn deocde_data_section(input: &[u8]) -> IResult<&[u8], Vec<Data>> {
++    let (mut input, count) = leb128_u32(input)?; // 1
++    let mut data = vec![];
++    for _ in 0..count {
++        let (rest, memory_index) = leb128_u32(input)?;
++        let (rest, offset) = decode_expr(rest)?; // 2
++        let (rest, size) = leb128_u32(rest)?; // 3
++        let (rest, init) = take(size)(rest)?; // 4
++        data.push(Data {
++            memory_index,
++            offset,
++            init: init.into(),
++        });
++        input = rest;
++    }
++    Ok((input, data))
++}
++
+ fn decode_name(input: &[u8]) -> IResult<&[u8], String> {
+     let (input, size) = leb128_u32(input)?;
+     let (input, name) = take(size)(input)?;
+```
+
+デコード処理では次のことをやっている。
+
+1. `segument`の個数を取得
+  `(data ...)`が1 segumentになるので、複数定義されている場合は複数回処理をする必要がある
+2. `offset`を計算する
+  本来は`decode_expr(...)`で命令列を処理して`offset`の値を計算する必要があるが、今回は`[i32.const, 1, end]`の命令列を前提にした実装で留める
+3. データのサイズを取得する
+4. 3のサイズ分のバイト列を取得、これが実際のデータになる
+
+続けて、テストを追加して実装が問題ないことを確認する。
+
+```diff:src/binary/module.rs
+diff --git a/src/binary/module.rs b/src/binary/module.rs
+index c0c1aff..40f20fd 100644
+--- a/src/binary/module.rs
++++ b/src/binary/module.rs
+@@ -333,7 +333,7 @@ mod tests {
+         module::Module,
+         section::Function,
+         types::{
+-            Export, ExportDesc, FuncType, FunctionLocal, Import, ImportDesc, Limits, Memory,
++            Data, Export, ExportDesc, FuncType, FunctionLocal, Import, ImportDesc, Limits, Memory,
+             ValueType,
+         },
+     };
+@@ -547,4 +547,48 @@ mod tests {
+         }
+         Ok(())
+     }
++
++    #[test]
++    fn decode_data() -> Result<()> {
++        let tests = vec![
++            (
++                "(module (memory 1) (data (i32.const 0) \"hello\"))",
++                vec![Data {
++                    memory_index: 0,
++                    offset: 0,
++                    init: "hello".as_bytes().to_vec(),
++                }],
++            ),
++            (
++                "(module (memory 1) (data (i32.const 0) \"hello\") (data (i32.const 5) \"world\"))",
++                vec![
++                    Data {
++                        memory_index: 0,
++                        offset: 0,
++                        init: b"hello".into(),
++                    },
++                    Data {
++                        memory_index: 0,
++                        offset: 5,
++                        init: b"world".into(),
++                    },
++                ],
++            ),
++        ];
++
++        for (wasm, data) in tests {
++            let module = Module::new(&wat::parse_str(wasm)?)?;
++            assert_eq!(
++                module,
++                Module {
++                    memory_section: Some(vec![Memory {
++                        limits: Limits { min: 1, max: None }
++                    }]),
++                    data_section: Some(data),
++                    ..Default::default()
++                }
++            );
++        }
++        Ok(())
++    }
+ }
+```
+
+```sh
+running 14 tests
 test binary::module::tests::decode_simplest_module ... ok
-test binary::module::tests::decode_i32_store ... ok
+test binary::module::tests::decode_memory ... ok
+test binary::module::tests::decode_simplest_func ... ok
+test binary::module::tests::decode_func_add ... ok
+test binary::module::tests::decode_func_param ... ok
 test binary::module::tests::decode_import ... ok
 test binary::module::tests::decode_func_call ... ok
 test binary::module::tests::decode_func_local ... ok
-test binary::module::tests::decode_func_add ... ok
-test binary::module::tests::decode_memory ... ok
 test binary::module::tests::decode_data ... ok
-test execution::runtime::tests::execute_i32_add ... ok
-test execution::runtime::tests::i32_const ... ok
 test execution::runtime::tests::call_imported_func ... ok
-test execution::runtime::tests::func_call ... ok
-test execution::runtime::tests::i32_store ... ok
-test execution::runtime::tests::local_set ... ok
+test execution::runtime::tests::execute_i32_add ... ok
 test execution::runtime::tests::not_found_export_function ... ok
+test execution::runtime::tests::func_call ... ok
 test execution::runtime::tests::not_found_imported_func ... ok
-test execution::store::test::init_memory ... ok
 ```
 
-## `WASI`の`fd_write`の実装
+メモリデータを取得できるようになったので、最後に`Runtime`のメモリ上にデータを配置していく。
 
-いよいよ最後の大詰めだ。
+```diff:src/execution/store.rs
+diff --git a/src/execution/store.rs b/src/execution/store.rs
+index efadc19..cad96ca 100644
+--- a/src/execution/store.rs
++++ b/src/execution/store.rs
+@@ -5,7 +5,7 @@ use crate::binary::{
+     module::Module,
+     types::{ExportDesc, FuncType, ImportDesc, ValueType},
+ };
+-use anyhow::{bail, Result};
++use anyhow::{anyhow, bail, Result};
+ 
+ pub const PAGE_SIZE: u32 = 65536; // 64Ki
+ 
+@@ -146,6 +146,22 @@ impl Store {
+             }
+         }
+ 
++        if let Some(ref sections) = module.data_section {
++            for data in sections {
++                let memory = memories
++                    .get_mut(data.memory_index as usize)
++                    .ok_or(anyhow!("not found memory"))?;
++
++                let offset = data.offset as usize;
++                let init = &data.init;
++
++                if offset + init.len() > memory.data.len() {
++                    bail!("data is too large to fit in memory");
++                }
++                memory.data[offset..offset + init.len()].copy_from_slice(init);
++            }
++        }
++
+         Ok(Self {
+             funcs,
+             memories,
+```
 
+やっていることはシンプルで、メモリに`Data Section`のデータを指定した場所にコピーしている。
+最後にテストを追加して実装が問題ないことを確認する。
+
+```diff:src/execution/store.rs
+diff --git a/src/execution/store.rs b/src/execution/store.rs
+index cad96ca..1bb1192 100644
+--- a/src/execution/store.rs
++++ b/src/execution/store.rs
+@@ -169,3 +169,32 @@ impl Store {
+         })
+     }
+ }
++
++#[cfg(test)]
++mod test {
++    use super::Store;
++    use crate::binary::module::Module;
++    use anyhow::Result;
++
++    #[test]
++    fn init_memory() -> Result<()> {
++        let wasm = wat::parse_file("src/fixtures/memory.wat")?;
++        let module = Module::new(&wasm)?;
++        let store = Store::new(module)?;
++        assert_eq!(store.memories.len(), 1);
++        assert_eq!(store.memories[0].data.len(), 65536);
++        assert_eq!(&store.memories[0].data[0..5], b"hello");
++        assert_eq!(&store.memories[0].data[5..10], b"world");
++        Ok(())
++    }
++}
+```
+
+```sh
+running 15 tests
+test binary::module::tests::decode_func_param ... ok
+test binary::module::tests::decode_func_local ... ok
+test binary::module::tests::decode_simplest_module ... ok
+test binary::module::tests::decode_simplest_func ... ok
+test binary::module::tests::decode_memory ... ok
+test binary::module::tests::decode_import ... ok
+test binary::module::tests::decode_func_add ... ok
+test execution::runtime::tests::call_imported_func ... ok
+test binary::module::tests::decode_func_call ... ok
+test binary::module::tests::decode_data ... ok
+test execution::runtime::tests::execute_i32_add ... ok
+test execution::runtime::tests::not_found_export_function ... ok
+test execution::store::test::init_memory ... ok
+test execution::runtime::tests::func_call ... ok
+test execution::runtime::tests::not_found_imported_func ... ok
+```
 
 ## まとめ
-これで`"Hello, World"`が出力できる小さな`Wasm Runtime`が完成した。
-色々と覚えることは多かったと思うが、やっていることは意外と難しくないのではなかろうか。
-
-本書で実装した命令はほんの僅かなのでできることはほとんどないが、`Wasm Runtime`が動く仕組みを実装レベルで理解するには充分である。
-もし、完全な`Wasm Runtime`の実装にチャレンジしたい方はぜひ仕様書を読みつつ実装してみてほしい。
-大変だが、動かせたときはとても楽しいと思う。
-
-参考までに、version 1の命令とある程度の`WASI`を実装すると次の様なことができる。
-
-https://zenn.dev/skanehira/articles/2023-09-18-rust-wasm-runtime-containerd
-https://zenn.dev/skanehira/articles/2023-12-02-wasm-risp
+本章ではメモリ初期化の機能を実装した。
+これでメモリ上に任意のデータを配置できるようになったので、
+次章ではメモリ上に`Hello, World!`を配置して、それを出力できるようにしていく。

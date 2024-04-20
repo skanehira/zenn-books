@@ -16,7 +16,7 @@ assert_eq!(result, Some(Value::I32(want)));
 ```
 
 ## `Import Section`のデコード実装
-Wasmバイナリの構造の章で以下のように説明をしたとおり、`Wasm Runtime`にはインポート機能がある。
+[Wasmバイナリの構造](https://zenn.dev/skanehira/books/writing-wasm-runtime-in-rust/viewer/04_wasm_binary_structure#import-section)の章で以下のように説明をしたとおり、`Wasm Runtime`にはインポート機能がある。
 
 > `Import Section`がモジュール外にあるメモリや関数などをインポートするための情報が定義されている領域である。
 > モジュール外とは、他モジュールやRuntimeが用意したメモリや関数のことを指す。
@@ -596,5 +596,3 @@ test execution::runtime::tests::not_found_imported_func ... ok
 
 実は外部関数を実行できる時点で`"Hello, World"`を出力できるようになるが、
 本書はちゃんと`WASI`を実装して出力する。
-
-次章で最後になるのであと少し一緒に頑張っていこう。
