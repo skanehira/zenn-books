@@ -62,7 +62,7 @@ Runtime（実行環境）があればWasmバイナリを実行できるので、
 
 また、感想や質問などはこちらへ
 
-https://zenn.dev/skanehira/scraps/d6079606e7445c
+https://zenn.dev/skanehira/scraps/2a8fb82a5176ba
 
 ## 筆者について
 ゴリラ
