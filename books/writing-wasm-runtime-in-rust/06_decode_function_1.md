@@ -49,7 +49,7 @@ title: "関数のデコード実装 ~ セクションのデコードまで ~"
 | `Code Section`     | 関数ごとの命令などの情報             |
 | `Function Section` | 関数シグネチャへの参照情報           |
 
-各種セクションのフォーマットについては[Wasmバイナリの構造の章](/books/writing-wasm-runtime-in-rust/04_wasm_binary_structure%252Emd)で説明したとおりなので、それを参照してもらいながら実装について解説していく。
+各種セクションのフォーマットについては[Wasmバイナリの構造の章](https://zenn.dev/skanehira/books/writing-wasm-runtime-in-rust/viewer/04_wasm_binary_structure)で説明したとおりなので、それを参照してもらいながら実装について解説していく。
 
 ### セクションヘッダーのデコード
 各種セクションには必ず`section code`と`section size`を持つセクションヘッダーがあるので、
@@ -384,7 +384,7 @@ impl From<u8> for ValueType {
 ```
 
 ### `Function Section`のデコード
-`Function Section`は[Wasmバイナリの構造の章](/books/writing-wasm-runtime-in-rust/04_wasm_binary_structure%252Emd)で説明をしたとおり、関数のシグネチャ情報(`Type Section`)を紐付けるための領域である。
+`Function Section`は[Wasmバイナリの構造の章](https://zenn.dev/skanehira/books/writing-wasm-runtime-in-rust/viewer/04_wasm_binary_structure)で説明をしたとおり、関数のシグネチャ情報(`Type Section`)を紐付けるための領域である。
 
 バイナリ構造は次のとおり。
 

@@ -39,7 +39,7 @@ pretty_assertions = "1.4.0" # テスト時の差分を見やすくしてくれ�
 ```
 
 ## プリアンブルのデコード
-プリアンブルは[Wasmバイナリの構造の章](/books/writing-wasm-runtime-in-rust/04_wasm_binary_structure%252Emd)で説明したとおり、次のようなバイナリ構造になっている。
+プリアンブルは[Wasmバイナリの構造の章](https://zenn.dev/skanehira/books/writing-wasm-runtime-in-rust/viewer/04_wasm_binary_structure)で説明したとおり、次のようなバイナリ構造になっている。
 全部で8バイトあり、先頭の4バイトは`\0asm`、残りの4バイトはバージョン情報となっている。
 
 ```
