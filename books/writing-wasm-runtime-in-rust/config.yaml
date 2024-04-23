@@ -19,3 +19,4 @@ chapters:
   - 12_build_runtime_additional_instruction
   - 13_build_runtime_initialize_memory
   - 14_build_runtime_wasi
+  - 15_extra_execute_fibonacci
