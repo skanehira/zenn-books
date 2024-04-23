@@ -424,7 +424,7 @@ pub enum Opcode {
 
 続けて、命令の定義を追加する。
 
-```diff:src/binary/module.rs
+```diff:src/binary/instruction.rs
  #[derive(Debug, Clone, PartialEq, Eq)]
  pub enum Instruction {
      End,
