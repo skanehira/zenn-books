@@ -12,7 +12,7 @@ $ rustc --version
 rustc 1.77.2 (25ef9e3d8 2024-04-09)
 ```
 
-また本書ように作成した`Wasm Runtime`の実装は次のリポジトリにおいてあるので、もし分かりづらい部分があれば直接コードを参照してほしい。
+また本書用に作成した`Wasm Runtime`の実装は次のリポジトリにおいてあるので、もし分かりづらい部分があれば直接コードを参照してほしい。
 
 https://github.com/skanehira/tiny-wasm-runtime
 
@@ -23,7 +23,7 @@ https://github.com/skanehira/tiny-wasm-runtime
 $ cargo new tiny-wasm-runtime --name tinywasm
 ```
 
-プロジェクトを作成したら、次のクレートを`Cargo.toml`に以下を追記する。
+プロジェクトを作成したら、`Cargo.toml`に以下を追記する。
 
 ```toml:Cargo.toml
 [dependencies]
@@ -91,7 +91,7 @@ pub mod binary;
 ```
 
 次にテストを実装していく。
-テストはではWATコードをWasmバイナリにコンパイルして、それをデコードした結果が想定したデータ構造になっていることを確認していく。
+テストではWATコードをWasmバイナリにコンパイルして、それをデコードした結果が想定したデータ構造になっていることを確認していく。
 
 ```diff:src/binary/module.rs
 @@ -3,3 +3,17 @@ pub struct Module {
