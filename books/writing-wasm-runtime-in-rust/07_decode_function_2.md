@@ -70,7 +70,7 @@ title: "関数のデコード実装 ~ 命令のデコードまで ~"
  
 -fn decode_type_section(_input: &[u8]) -> IResult<&[u8], Vec<FuncType>> {
 -    let func_types = vec![FuncType::default()];
-+fn decode_vaue_type(input: &[u8]) -> IResult<&[u8], ValueType> {
++fn decode_value_type(input: &[u8]) -> IResult<&[u8], ValueType> {
 +    let (input, value_type) = le_u8(input)?;
 +    Ok((input, value_type.into()))
 +}
@@ -86,12 +86,12 @@ title: "関数のデコード実装 ~ 命令のデコードまで ~"
 +
 +        let (rest, size) = leb128_u32(rest)?; // 3
 +        let (rest, types) = take(size)(rest)?;
-+        let (_, types) = many0(decode_vaue_type)(types)?; // 4
++        let (_, types) = many0(decode_value_type)(types)?; // 4
 +        func.params = types;
 +
 +        let (rest, size) = leb128_u32(rest)?; // 5
 +        let (rest, types) = take(size)(rest)?;
-+        let (_, types) = many0(decode_vaue_type)(types)?; // 6
++        let (_, types) = many0(decode_value_type)(types)?; // 6
 +        func.results = types;
  
 -    // TODO: 引数と戻り値のデコード
@@ -104,7 +104,7 @@ title: "関数のデコード実装 ~ 命令のデコードまで ~"
 ```
 
 `many0()`は受け取った関数を使って、入力が終わるまでパースし続けて、入力の残りとパース結果を`Vec`で返す関数である。
-これを使って、「`u8`を読み取って`ValueType`に変換」する関数である`decode_vaue_type()`を繰り返している。
+これを使って、「`u8`を読み取って`ValueType`に変換」する関数である`decode_value_type()`を繰り返している。
 このように、`many0()`を使うことで`for`を使ってデコードする必要がなくなり、実装がシンプルになる。
 
 実装はできたので、続けてテストを実装していくが、現時点では引数のテストのみとする。
