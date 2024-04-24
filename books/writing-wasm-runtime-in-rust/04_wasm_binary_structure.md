@@ -104,7 +104,7 @@ Wasmバイナリは先頭に8バイトのプリアンブル、それに続いて
 ```
 ; section "Type" (1)
 0000008: 01          ; section code
-0000009: 00          ; section size
+0000009: 0d          ; section size
 000000a: 02          ; num types
 ```
 

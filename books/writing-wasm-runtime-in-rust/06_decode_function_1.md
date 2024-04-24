@@ -49,7 +49,7 @@ title: "関数のデコード実装 ~ セクションのデコードまで ~"
 | `Code Section`     | 関数ごとの命令などの情報             |
 | `Function Section` | 関数シグネチャへの参照情報           |
 
-各種セクションのフォーマットについては[Wasmバイナリの構造の章](/books/writing-wasm-runtime-in-rust/04_wasm_binary_structure%252Emd)で説明したとおりなので、それを参照してもらいながら実装について解説していく。
+各種セクションのフォーマットについては[Wasmバイナリの構造の章](https://zenn.dev/skanehira/books/writing-wasm-runtime-in-rust/viewer/04_wasm_binary_structure)で説明したとおりなので、それを参照してもらいながら実装について解説していく。
 
 ### セクションヘッダーのデコード
 各種セクションには必ず`section code`と`section size`を持つセクションヘッダーがあるので、
@@ -141,7 +141,7 @@ let (input, size) = leb128_u32(input);
 
 :::message alert
 `Wasm spec`では数値はすべてLEB128でエンコードすると定められていることに注意
-筆者はこれを知らず、テスト通らなくて数時間を溶かしたことがある
+筆者はこれを知らず、テストが通らなくて数時間を溶かしたことがある
 :::
 
 ②の`SectionCode::from_u8()`は`num_derive::FromPrimitive`マクロで実装された関数である。
@@ -384,7 +384,7 @@ impl From<u8> for ValueType {
 ```
 
 ### `Function Section`のデコード
-`Function Section`は[Wasmバイナリの構造の章](/books/writing-wasm-runtime-in-rust/04_wasm_binary_structure%252Emd)で説明をしたとおり、関数のシグネチャ情報(`Type Section`)を紐付けるための領域である。
+`Function Section`は[Wasmバイナリの構造の章](https://zenn.dev/skanehira/books/writing-wasm-runtime-in-rust/viewer/04_wasm_binary_structure)で説明をしたとおり、関数のシグネチャ情報(`Type Section`)を紐付けるための領域である。
 
 バイナリ構造は次のとおり。
 
@@ -673,4 +673,4 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 一部TODOが残っているが、本章では関数デコードの実装を解説した。
 大枠はこれで把握できたのではないかと思うので、次章は関数の引数、戻り値のデコードと合わせてTODOの部分の実装について解説していく。
 
-[^1]: 任意の大きさなの数値を少ないバイト数で格納するための可変長符号圧縮の方式
+[^1]: 任意の大きさの数値を少ないバイト数で格納するための可変長符号圧縮の方式

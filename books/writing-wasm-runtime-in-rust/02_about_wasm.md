@@ -39,13 +39,13 @@ WASIはPOSIXライクなシステムコール関数の集まりとなってい�
   たとえば環境変数から機密情報を抜き取る、といったようなことはできないためセキュアである
 - **ポータビリティ**  
   WasmはOS・CPUに依存せず、Runtimeがあればどこでも実行できる  
-  Google ChromeやFireFox、Microsoft Edgeといった主要なブラウザで実行できる
+  Google ChromeやFirefox、Microsoft Edgeといった主要なブラウザで実行できる
   主要のブラウザ以外にも、[Wasmtime](https://wasmtime.dev)や[wazero](https://wazero.io)といったサーバーサイドで実行できるRuntimeもある
 - **言語の多様性**   
   Wasmは複数の言語からコンパイルできるので各言語の財産を利用できる  
   また、他のWasmバイナリをimportできるため、言語の壁を超えて各言語の財産を共有できる
 
-[^1]: Runtimeの実装に脆弱性がないことが前提とする
+[^1]: Runtimeの実装に脆弱性がないことを前提とする
 
 ### デメリット
 - **古いブラウザのサポートをしていない**  

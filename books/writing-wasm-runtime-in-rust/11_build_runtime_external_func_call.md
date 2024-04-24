@@ -561,7 +561,7 @@ test execution::runtime::tests::func_call ... ok
 test execution::runtime::tests::not_found_export_function ... ok
 ```
 
-外部関数が見つからない場合はちゃんとエラーになることも合わせ確認する。
+外部関数が見つからない場合はちゃんとエラーになることも合わせて確認する。
 
 ```diff:src/execution/runtime.rs
 diff --git a/src/execution/runtime.rs b/src/execution/runtime.rs

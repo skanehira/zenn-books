@@ -2,7 +2,7 @@
 title: "Wasm入門"
 ---
 
-本章はWAT（WebAssembly Text Format）というWasmバイナリをコンパイルできる言語を使って、実際にWasmを動かすことを体験していく。
+本章はWAT（WebAssembly Text Format）というWasmバイナリへコンパイルできる言語を使って、実際にWasmを動かすことを体験していく。
 
 なお、WATの解説はMDNの[WebAssembly テキスト形式の理解](https://developer.mozilla.org/ja/docs/WebAssembly/Understanding_the_text_format)にとてもわかり易く書かれているので、詳細な説明はそちらを参照してほしい。
 「はじめての関数本体」までをひととおり理解できれば、基本的に本章以降の説明で困ることはないと思う。

@@ -478,7 +478,7 @@ pub enum Opcode {
      use crate::binary::{
 ```
 
-続けて、テストを実装してく。
+続けて、テストを実装していく。
 
 ```diff:src/binary/module.rs
 @@ -280,4 +280,31 @@ mod tests {
