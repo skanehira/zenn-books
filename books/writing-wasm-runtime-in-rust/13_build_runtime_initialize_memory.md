@@ -13,6 +13,8 @@ title: "Runtimeの実装 ~ メモリ初期化まで ~"
 )
 ```
 
+また、前章で残した`i32.store`の命令実装もしていく。
+
 ## `Memory Section`のデコード実装
 
 まず`Memory Section`をデコードできるようにしていく。
@@ -577,7 +579,139 @@ test execution::runtime::tests::func_call ... ok
 test execution::runtime::tests::not_found_imported_func ... ok
 ```
 
+## `i32.store`の実装
+
+メモリの初期化ができるようになったので、`i32.store`の命令を実装していく。
+
+```diff
+diff --git a/src/execution/value.rs b/src/execution/value.rs
+index b24fd25..21d364d 100644
+--- a/src/execution/value.rs
++++ b/src/execution/value.rs
+@@ -10,6 +10,15 @@ impl From<i32> for Value {
+     }
+ }
+ 
++impl From<Value> for i32 {
++    fn from(value: Value) -> Self {
++        match value {
++            Value::I32(value) => value,
++            _ => panic!("type mismatch"),
++        }
++    }
++}
++
+ impl From<i64> for Value {
+     fn from(value: i64) -> Self {
+         Value::I64(value)
+```
+
+```diff
+diff --git a/src/execution/runtime.rs b/src/execution/runtime.rs
+index b5b7417..3584fdf 100644
+--- a/src/execution/runtime.rs
++++ b/src/execution/runtime.rs
+@@ -1,3 +1,5 @@
++use std::mem::size_of;
++
+ use super::{
+     import::Import,
+     store::{ExternalFuncInst, FuncInst, InternalFuncInst, Store},
+@@ -161,6 +163,22 @@ impl Runtime {
+                     let idx = *idx as usize;
+                     frame.locals[idx] = value;
+                 }
++                Instruction::I32Store { align: _, offset } => {
++                    let (Some(value), Some(addr)) = (self.stack.pop(), self.stack.pop()) else { // 1
++                        bail!("not found any value in the stack");
++                    };
++                    let addr = Into::<i32>::into(addr) as usize;
++                    let offset = (*offset) as usize;
++                    let at = addr + offset; // 2
++                    let end = at + size_of::<i32>(); // 3
++                    let memory = self
++                        .store
++                        .memories
++                        .get_mut(0)
++                        .ok_or(anyhow!("not found memory"))?;
++                    let value: i32 = value.into();
++                    memory.data[at..end].copy_from_slice(&value.to_le_bytes()); // 4
++                }
+                 Instruction::I32Const(value) => self.stack.push(Value::I32(*value)),
+                 Instruction::I32Add => {
+                     let (Some(right), Some(left)) = (self.stack.pop(), self.stack.pop()) else {
+```
+
+命令の処理では次のことをやっている。
+
+1. スタックからメモリに書き込む値とアドレスを取得
+2. 1のアドレス + オフセットで書き込み先のインデックスを取得
+3. メモリへの書き込み範囲を算出する
+4. 値をリトルエンディアンのバイト列に変換して、2と3で計算した範囲にデータをコピー
+
+最後にテストを追加して実装に問題ないことを確認する。
+
+```wat:src/fixtures/i32_store.wat
+(module
+  (memory 1)
+  (func $i32_store
+    (i32.const 0)
+    (i32.const 42)
+    (i32.store)
+  )
+  (export "i32_store" (func $i32_store))
+)
+```
+
+`i32_store.wat`ではアドレスが`0`で値が`42`、オフセットは`0`なので最終的にメモリの`0`番地に対して`42`を書き込むことになる。
+そのためテストでは`0`番地が`42`になっていることを確認する。
+
+```diff:src/execution/runtime.rs
+diff --git a/src/execution/runtime.rs b/src/execution/runtime.rs
+index 19b766c..79aa5e5 100644
+--- a/src/execution/runtime.rs
++++ b/src/execution/runtime.rs
+@@ -313,4 +313,14 @@ mod tests {
+         assert_eq!(result, Some(Value::I32(42)));
+         Ok(())
+     }
++
++    #[test]
++    fn i32_store() -> Result<()> {
++        let wasm = wat::parse_file("src/fixtures/i32_store.wat")?;
++        let mut runtime = Runtime::instantiate(wasm)?;
++        runtime.call("i32_store", vec![])?;
++        let memory = &runtime.store.memories[0].data;
++        assert_eq!(memory[0], 42);
++        Ok(())
++    }
+ }
+```
+
+```sh
+running 19 tests
+test binary::module::tests::decode_func_param ... ok
+test binary::module::tests::decode_simplest_func ... ok
+test binary::module::tests::decode_simplest_module ... ok
+test binary::module::tests::decode_i32_store ... ok
+test binary::module::tests::decode_import ... ok
+test binary::module::tests::decode_func_call ... ok
+test binary::module::tests::decode_func_local ... ok
+test binary::module::tests::decode_func_add ... ok
+test binary::module::tests::decode_memory ... ok
+test binary::module::tests::decode_data ... ok
+test execution::runtime::tests::execute_i32_add ... ok
+test execution::runtime::tests::i32_const ... ok
+test execution::runtime::tests::call_imported_func ... ok
+test execution::runtime::tests::func_call ... ok
+test execution::runtime::tests::i32_store ... ok
+test execution::runtime::tests::local_set ... ok
+test execution::runtime::tests::not_found_export_function ... ok
+test execution::runtime::tests::not_found_imported_func ... ok
+test execution::store::test::init_memory ... ok
+```
+
 ## まとめ
-本章ではメモリ初期化の機能を実装した。
+本章ではメモリ初期化の機能と`i32.store`命令を実装した。
 これでメモリ上に任意のデータを配置できるようになったので、
 次章ではメモリ上に`Hello, World!`を配置して、それを出力できるようにしていく。
