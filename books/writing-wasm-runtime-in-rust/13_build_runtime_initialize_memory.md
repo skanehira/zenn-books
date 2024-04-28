@@ -530,6 +530,14 @@ index efadc19..cad96ca 100644
 やっていることはシンプルで、メモリに`Data Section`のデータを指定した場所にコピーしている。
 最後にテストを追加して実装が問題ないことを確認する。
 
+```wat:src/fixtures/memory.wat
+(module
+  (memory 1)
+  (data (i32.const 0) "hello")
+  (data (i32.const 5) "world")
+)
+```
+
 ```diff:src/execution/store.rs
 diff --git a/src/execution/store.rs b/src/execution/store.rs
 index cad96ca..1bb1192 100644
