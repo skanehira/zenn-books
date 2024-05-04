@@ -70,7 +70,7 @@ impl std::ops::Add for Value {
 pub mod value;
 ```
 
-```diff:src/execution/lib.rs
+```diff:src/lib.rs
 diff --git a/src/lib.rs b/src/lib.rs
 index 96eab66..ec63376 100644
 --- a/src/lib.rs
