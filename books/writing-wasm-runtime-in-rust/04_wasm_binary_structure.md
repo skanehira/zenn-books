@@ -216,7 +216,7 @@ Wasmバイナリは先頭に8バイトのプリアンブル、それに続いて
 
 少し分かりづらいので、関連性を図1にすると次のようになる。
 
-![](/images/relation_type_func_body.png)
+![](/images/writing-wasm-runtime-in-rust/relation_type_func_body.png)
 *図1*
 
 ### [Memory Section](https://www.w3.org/TR/wasm-core-1/#memory-section%E2%91%A0)
@@ -308,7 +308,7 @@ Wasmバイナリは先頭に8バイトのプリアンブル、それに続いて
 
 図2はリスト9の`segment`の構造を表したもの。
 
-![](/images/data_section.png)
+![](/images/writing-wasm-runtime-in-rust/data_section.png)
 *図2*
 
 ### [Export Section](https://www.w3.org/TR/wasm-core-1/#export-section%E2%91%A0)
