@@ -734,25 +734,25 @@ index 8d9ff62..f0d90f8 100644
              };
  
              match inst {
-+               Instruction::If(block) => {
-+                   let cond = self // 1
-+                       .stack
-+                       .pop()
-+                       .ok_or(anyhow!("not found value in the stack"))?;
++                Instruction::If(block) => {
++                    let cond = self // 1
++                        .stack
++                        .pop()
++                        .ok_or(anyhow!("not found value in the stack"))?;
 +
-+                   let next_pc = get_end_address(&frame.insts, frame.pc as usize)?; // 2
-+                   if cond == Value::I32(0) { // 3
-+                       frame.pc = next_pc as isize
-+                   }
++                    let next_pc = get_end_address(&frame.insts, frame.pc as usize)?; // 2
++                    if cond == Value::I32(0) { // 3
++                        frame.pc = next_pc as isize
++                    }
 +
-+                   let label = Label {
-+                       kind: LabelKind::If,
-+                       pc: next_pc,
-+                       sp: self.stack.len(),
-+                       arity: block.block_type.result_count(),
-+                   };
-+                   frame.labels.push(label);
-+               }
++                    let label = Label {
++                        kind: LabelKind::If,
++                        pc: next_pc,
++                        sp: self.stack.len(),
++                        arity: block.block_type.result_count(),
++                    };
++                    frame.labels.push(label);
++                }
                  Instruction::End => {
                      let Some(frame) = self.call_stack.pop() else {
                          bail!("not found frame");
