@@ -734,24 +734,25 @@ index 8d9ff62..f0d90f8 100644
              };
  
              match inst {
-+                Instruction::If(block) => {
-+                    let cond = self
-+                        .stack
-+                        .pop()
-+                        .ok_or(anyhow!("not found value in the stack"))?;
++               Instruction::If(block) => {
++                   let cond = self // 1
++                       .stack
++                       .pop()
++                       .ok_or(anyhow!("not found value in the stack"))?;
 +
-+                    if cond == Value::I32(0) { // 1
-+                        frame.pc = get_end_address(&frame.insts, frame.pc as usize)? as isize; // 2
-+                    }
++                   let next_pc = get_end_address(&frame.insts, frame.pc as usize)?; // 2
++                   if cond == Value::I32(0) { // 3
++                       frame.pc = next_pc as isize
++                   }
 +
-+                    let label = Label {
-+                        kind: LabelKind::If,
-+                        pc: frame.pc as usize,
-+                        sp: self.stack.len(),
-+                        arity: block.block_type.result_count(),
-+                    };
-+                    frame.labels.push(label);
-+                }
++                   let label = Label {
++                       kind: LabelKind::If,
++                       pc: next_pc,
++                       sp: self.stack.len(),
++                       arity: block.block_type.result_count(),
++                   };
++                   frame.labels.push(label);
++               }
                  Instruction::End => {
                      let Some(frame) = self.call_stack.pop() else {
                          bail!("not found frame");
@@ -766,7 +767,7 @@ index 8d9ff62..f0d90f8 100644
 +        pc += 1;
 +        let inst = insts.get(pc).ok_or(anyhow!("not found instructions"))?;
 +        match inst {
-+            Instruction::If(_) => { // 3
++            Instruction::If(_) => { // 4
 +                depth += 1;
 +            }
 +            Instruction::End => {
@@ -791,9 +792,10 @@ index 8d9ff62..f0d90f8 100644
 `if`命令では次のことをやっている。
 
 1. スタックから値を1つ`pop`して評価
-2. `false`だった場合は`if`の終わりの`pc`を算出
+2. `if`の終わりの`pc`を算出
+3. `false`だった場合は次の命令は`end`になるので`frame.pc`を2で計算した`pc`に更新する
     - `true`の場合は`pc`を調整する必要はなく、そのままラベルを`push`して続きの命令を処理する
-3. `if`がネストすることがあるので、その場合は`depth`で制御
+4. `if`がネストすることがあるので、その場合は`depth`で制御
 
 ちなみに`if`の終わりは関数の終わりと同じく`end`命令となっている。これは`block`と`loop`命令も同様である。
 
@@ -811,7 +813,7 @@ index f0d90f8..23ee5dc 100644
                      };
                      frame.labels.push(label);
                  }
-+                Instruction::Return => match frame.labels.pop() {
++                Instruction::End => match frame.labels.pop() {
 +                    Some(label) => {
 +                        let Label { pc, sp, arity, .. } = label;
 +                        frame.pc = pc as isize;
@@ -826,7 +828,7 @@ index f0d90f8..23ee5dc 100644
 +                        stack_unwind(&mut self.stack, sp, arity)?;
 +                    }
 +                },
-                 Instruction::End => {
+                 Instruction::Return => {
                      let Some(frame) = self.call_stack.pop() else {
                          bail!("not found frame");
 @@ -260,7 +275,6 @@ impl Runtime {
