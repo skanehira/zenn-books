@@ -10,7 +10,7 @@ title: "番外編 ~ フィボナッチ関数が動くまで ~"
   (func $fib (export "fib") (param $n i32) (result i32)
     (if
       (i32.lt_s (local.get $n) (i32.const 2))
-      (return (i32.const 1))
+      (then (return (i32.const 1)))
     )
     (return
       (i32.add
