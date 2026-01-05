@@ -2,14 +2,41 @@
 title: "ELFバイナリの構造"
 ---
 
-本章では、ELFバイナリの構造を詳しく解説する。
-リンカーを実装するにあたり、ELFの各構造体のフィールドを理解することが重要となる。
+本章では、`readelf`の出力と`/usr/include/elf.h`の構造体定義を照らし合わせながら、ELFバイナリの構造を理解していく。実際のバイナリを見ながら学ぶことで、パーサー実装のイメージを掴むことができる。
 
-ELFの構造に関しては、Linuxのヘッダーファイル`/usr/include/elf.h`を参照すると、バイナリのレイアウトがそのまま表現されているので参考になる。
+前章で作成した`sub.o`を使って確認していく。
 
 ## ELFヘッダー
 
 ELFヘッダーはELFファイルの先頭64バイトに配置され、ファイル全体のメタデータを含む。
+
+### readelfでの確認
+
+```sh
+$ readelf -h sub.o
+ELF Header:
+  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00
+  Class:                             ELF64
+  Data:                              2's complement, little endian
+  Version:                           1 (current)
+  OS/ABI:                            UNIX - System V
+  ABI Version:                       0
+  Type:                              REL (Relocatable file)
+  Machine:                           AArch64
+  Version:                           0x1
+  Entry point address:               0x0
+  Start of program headers:          0 (bytes into file)
+  Start of section headers:          416 (bytes into file)
+  Flags:                             0x0
+  Size of this header:               64 (bytes)
+  Size of program headers:           0 (bytes)
+  Number of program headers:         0
+  Size of section headers:           64 (bytes)
+  Number of section headers:         9
+  Section header string table index: 8
+```
+
+### elf.hの構造体定義
 
 ```c:/usr/include/elf.h
 typedef struct
@@ -31,41 +58,68 @@ typedef struct
 } Elf64_Ehdr;
 ```
 
-各フィールドの説明は次のとおり。
+### readelf出力との対応
 
-| フィールド | サイズ | 説明 |
-|-----------|--------|------|
-| `e_ident` | 16バイト | マジックナンバーとファイル情報 |
-| `e_type` | 2バイト | ファイルタイプ（REL=1, EXEC=2など） |
-| `e_machine` | 2バイト | アーキテクチャ（AArch64=183） |
-| `e_version` | 4バイト | ELFバージョン |
-| `e_entry` | 8バイト | エントリポイントのアドレス |
-| `e_phoff` | 8バイト | プログラムヘッダーテーブルのオフセット |
-| `e_shoff` | 8バイト | セクションヘッダーテーブルのオフセット |
-| `e_flags` | 4バイト | プロセッサ固有のフラグ |
-| `e_ehsize` | 2バイト | ELFヘッダーのサイズ（64バイト） |
-| `e_phentsize` | 2バイト | プログラムヘッダーエントリのサイズ |
-| `e_phnum` | 2バイト | プログラムヘッダーエントリの数 |
-| `e_shentsize` | 2バイト | セクションヘッダーエントリのサイズ |
-| `e_shnum` | 2バイト | セクションヘッダーエントリの数 |
-| `e_shstrndx` | 2バイト | セクション名文字列テーブルのインデックス |
+| readelf出力 | 構造体フィールド | サイズ | 値の例 |
+|-------------|-----------------|--------|--------|
+| Magic | `e_ident[0-3]` | 4バイト | `7f 45 4c 46`（`\x7fELF`） |
+| Class | `e_ident[4]` | 1バイト | 2（ELF64） |
+| Data | `e_ident[5]` | 1バイト | 1（リトルエンディアン） |
+| Type | `e_type` | 2バイト | 1（REL=オブジェクトファイル） |
+| Machine | `e_machine` | 2バイト | 183（AArch64） |
+| Entry point address | `e_entry` | 8バイト | 0x0（オブジェクトファイルでは0） |
+| Start of section headers | `e_shoff` | 8バイト | 416 |
+| Size of this header | `e_ehsize` | 2バイト | 64 |
+| Number of section headers | `e_shnum` | 2バイト | 9 |
+| Section header string table index | `e_shstrndx` | 2バイト | 8 |
 
-### e_ident（ELF識別子）
+パーサーを実装する際は、この順番でバイト列を読み取っていく。`e_shoff`（セクションヘッダーのオフセット）と`e_shnum`（セクション数）を使って、セクションヘッダーをパースできる。
 
-`e_ident`は16バイトの配列で、次の情報を含む。
+### e_ident（ELF識別子）の詳細
 
-| オフセット | 名前 | 説明 |
-|-----------|------|------|
-| 0-3 | `EI_MAG0-3` | マジックナンバー（0x7f, 'E', 'L', 'F'） |
-| 4 | `EI_CLASS` | ファイルクラス（1=32bit, 2=64bit） |
-| 5 | `EI_DATA` | データエンコーディング（1=リトルエンディアン, 2=ビッグエンディアン） |
-| 6 | `EI_VERSION` | ELFバージョン |
-| 7 | `EI_OSABI` | OS/ABI識別子 |
-| 8-15 | `EI_PAD` | パディング（未使用） |
+`e_ident`は16バイトの配列で、ELFファイルの基本情報を格納する。
+
+| オフセット | 名前 | 説明 | 値の例 |
+|-----------|------|------|--------|
+| 0-3 | `EI_MAG0-3` | マジックナンバー | `0x7f, 'E', 'L', 'F'` |
+| 4 | `EI_CLASS` | ファイルクラス | 2=64bit |
+| 5 | `EI_DATA` | エンディアン | 1=リトルエンディアン |
+| 6 | `EI_VERSION` | ELFバージョン | 1 |
+| 7 | `EI_OSABI` | OS/ABI | 0=System V |
+| 8-15 | `EI_PAD` | パディング | 0 |
+
+パーサーではまずマジックナンバー（`0x7f, 'E', 'L', 'F'`）を確認し、ELFファイルであることを検証する。
 
 ## セクションヘッダー
 
-セクションヘッダーは各セクションのメタデータを格納する。
+セクションヘッダーは各セクションのメタデータを格納する。ELFヘッダーの`e_shoff`が指す位置から、`e_shnum`個のセクションヘッダーが並んでいる。
+
+### readelfでの確認
+
+```sh
+$ readelf -S sub.o
+There are 9 section headers, starting at offset 0x1a0:
+
+Section Headers:
+  [Nr] Name              Type             Address           Offset
+       Size              EntSize          Flags  Link  Info  Align
+  [ 0]                   NULL             0000000000000000  00000000
+       0000000000000000  0000000000000000           0     0     0
+  [ 1] .text             PROGBITS         0000000000000000  00000040
+       0000000000000000  0000000000000000  AX       0     0     1
+  [ 2] .data             PROGBITS         0000000000000000  00000040
+       0000000000000004  0000000000000000  WA       0     0     4
+  [ 3] .bss              NOBITS           0000000000000000  00000044
+       0000000000000000  0000000000000000  WA       0     0     1
+  [ 6] .symtab           SYMTAB           0000000000000000  00000070
+       00000000000000d8  0000000000000018           7     8     8
+  [ 7] .strtab           STRTAB           0000000000000000  00000148
+       000000000000000c  0000000000000000           0     0     1
+  [ 8] .shstrtab         STRTAB           0000000000000000  00000154
+       0000000000000045  0000000000000000           0     0     1
+```
+
+### elf.hの構造体定義
 
 ```c:/usr/include/elf.h
 typedef struct
@@ -83,45 +137,91 @@ typedef struct
 } Elf64_Shdr;
 ```
 
-| フィールド | サイズ | 説明 |
-|-----------|--------|------|
-| `sh_name` | 4バイト | セクション名（.shstrtab内のオフセット） |
-| `sh_type` | 4バイト | セクションタイプ |
-| `sh_flags` | 8バイト | セクションフラグ |
-| `sh_addr` | 8バイト | 実行時の仮想アドレス |
-| `sh_offset` | 8バイト | ファイル内のオフセット |
-| `sh_size` | 8バイト | セクションサイズ |
-| `sh_link` | 4バイト | 関連セクションへのリンク |
-| `sh_info` | 4バイト | 追加情報 |
-| `sh_addralign` | 8バイト | アラインメント |
-| `sh_entsize` | 8バイト | エントリサイズ（テーブルの場合） |
+### readelf出力との対応
 
-### セクションタイプ
+| readelf出力 | 構造体フィールド | サイズ | 説明 |
+|-------------|-----------------|--------|------|
+| Nr | （インデックス） | - | セクションの順番 |
+| Name | `sh_name` | 4バイト | `.shstrtab`内のオフセット |
+| Type | `sh_type` | 4バイト | セクションの種類 |
+| Address | `sh_addr` | 8バイト | 実行時の仮想アドレス |
+| Offset | `sh_offset` | 8バイト | ファイル内のオフセット |
+| Size | `sh_size` | 8バイト | セクションのサイズ |
+| Flags | `sh_flags` | 8バイト | セクションの属性 |
+| Link | `sh_link` | 4バイト | 関連セクションへのリンク |
+| Info | `sh_info` | 4バイト | 追加情報 |
+| Align | `sh_addralign` | 8バイト | アラインメント |
+| EntSize | `sh_entsize` | 8バイト | エントリサイズ（テーブルの場合） |
 
-主なセクションタイプは次のとおり。
+`sh_name`は文字列テーブル（`.shstrtab`）内のオフセットであり、実際のセクション名はそこから取得する必要がある。
 
-| 値 | 名前 | 説明 |
-|----|------|------|
-| 0 | `SHT_NULL` | 未使用 |
-| 1 | `SHT_PROGBITS` | プログラムデータ（.text, .dataなど） |
-| 2 | `SHT_SYMTAB` | シンボルテーブル |
-| 3 | `SHT_STRTAB` | 文字列テーブル |
-| 4 | `SHT_RELA` | 再配置エントリ（addend付き） |
-| 8 | `SHT_NOBITS` | 未初期化データ（.bss） |
+### セクションタイプ（sh_type）
 
-### セクションフラグ
+| 値 | 名前 | 説明 | 該当セクション例 |
+|----|------|------|----------------|
+| 0 | `SHT_NULL` | 未使用 | インデックス0 |
+| 1 | `SHT_PROGBITS` | プログラムデータ | `.text`, `.data` |
+| 2 | `SHT_SYMTAB` | シンボルテーブル | `.symtab` |
+| 3 | `SHT_STRTAB` | 文字列テーブル | `.strtab`, `.shstrtab` |
+| 4 | `SHT_RELA` | 再配置エントリ | `.rela.text` |
+| 8 | `SHT_NOBITS` | 未初期化データ | `.bss` |
 
-主なセクションフラグは次のとおり。
+### セクションフラグ（sh_flags）
 
-| 値 | 名前 | 説明 |
-|----|------|------|
-| 0x1 | `SHF_WRITE` | 書き込み可能 |
-| 0x2 | `SHF_ALLOC` | メモリに配置される |
-| 0x4 | `SHF_EXECINSTR` | 実行可能 |
+| 値 | 名前 | readelf表示 | 説明 |
+|----|------|-------------|------|
+| 0x1 | `SHF_WRITE` | W | 書き込み可能 |
+| 0x2 | `SHF_ALLOC` | A | メモリに配置される |
+| 0x4 | `SHF_EXECINSTR` | X | 実行可能 |
+
+`.text`セクションは`AX`（Alloc + eXecute）、`.data`セクションは`WA`（Write + Alloc）となっている。
+
+### sh_linkの使い方
+
+`.symtab`セクションの`Link`が`7`になっているのは、シンボル名の文字列テーブルがインデックス7の`.strtab`であることを示している。パーサー実装時は、この値を使って文字列テーブルを参照する。
+
+## 文字列テーブル
+
+文字列テーブルはNULL終端の文字列を連続して格納する。シンボル名やセクション名は、文字列テーブル内のオフセットとして参照される。
+
+```
+オフセット: 0   1   2   3   4   5   6   7   8   9  10
+データ:    \0   x  \0   _   s   t   a   r   t  \0  ...
+```
+
+オフセット1から始まる文字列は`x`、オフセット3から始まる文字列は`_start`となる。
+
+ELFには2種類の文字列テーブルがある。
+
+| テーブル | 用途 | 参照元 |
+|----------|------|--------|
+| `.strtab` | シンボル名の格納 | シンボルテーブルの`st_name` |
+| `.shstrtab` | セクション名の格納 | セクションヘッダーの`sh_name` |
+
+パーサーでは、オフセットからNULLバイトまでを読み取って文字列を取得する。
 
 ## シンボルテーブル
 
 シンボルテーブルは関数や変数の情報を格納する。
+
+### readelfでの確認
+
+```sh
+$ readelf -s sub.o
+Symbol table '.symtab' contains 9 entries:
+   Num:    Value          Size Type    Bind   Vis      Ndx Name
+     0: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT  UND
+     1: 0000000000000000     0 FILE    LOCAL  DEFAULT  ABS sub.c
+     2: 0000000000000000     0 SECTION LOCAL  DEFAULT    1
+     3: 0000000000000000     0 SECTION LOCAL  DEFAULT    2
+     4: 0000000000000000     0 SECTION LOCAL  DEFAULT    3
+     5: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT    2 $d
+     6: 0000000000000000     0 SECTION LOCAL  DEFAULT    5
+     7: 0000000000000000     0 SECTION LOCAL  DEFAULT    4
+     8: 0000000000000000     4 OBJECT  GLOBAL DEFAULT    2 x
+```
+
+### elf.hの構造体定義
 
 ```c:/usr/include/elf.h
 typedef struct
@@ -135,28 +235,38 @@ typedef struct
 } Elf64_Sym;
 ```
 
-| フィールド | サイズ | 説明 |
-|-----------|--------|------|
-| `st_name` | 4バイト | シンボル名（.strtab内のオフセット） |
-| `st_info` | 1バイト | シンボルタイプとバインディング |
-| `st_other` | 1バイト | シンボルの可視性 |
-| `st_shndx` | 2バイト | 所属セクションのインデックス |
-| `st_value` | 8バイト | シンボルの値（アドレス） |
-| `st_size` | 8バイト | シンボルのサイズ |
+### readelf出力との対応
 
-### st_info
+| readelf出力 | 構造体フィールド | サイズ | 説明 |
+|-------------|-----------------|--------|------|
+| Num | （インデックス） | - | シンボルの順番（再配置から参照される） |
+| Value | `st_value` | 8バイト | シンボルの値（アドレスやオフセット） |
+| Size | `st_size` | 8バイト | シンボルのサイズ |
+| Type | `st_info`の下位4ビット | - | シンボルの種類 |
+| Bind | `st_info`の上位4ビット | - | バインディング |
+| Vis | `st_other` | 1バイト | 可視性 |
+| Ndx | `st_shndx` | 2バイト | 所属セクションのインデックス |
+| Name | `st_name` | 4バイト | `.strtab`内のオフセット |
 
-`st_info`は上位4ビットがバインディング、下位4ビットがタイプを表す。
+`st_info`は1バイトに2つの情報が格納されている点に注意。パーサーでは上位4ビットと下位4ビットを分離して解釈する必要がある。
 
-**バインディング**
+### st_infoのエンコーディング
+
+```c
+#define ELF64_ST_BIND(info)          ((info) >> 4)
+#define ELF64_ST_TYPE(info)          ((info) & 0xf)
+#define ELF64_ST_INFO(bind, type)    (((bind) << 4) + ((type) & 0xf))
+```
+
+**バインディング（上位4ビット）**
 
 | 値 | 名前 | 説明 |
 |----|------|------|
-| 0 | `STB_LOCAL` | ローカルシンボル（ファイル内のみ） |
-| 1 | `STB_GLOBAL` | グローバルシンボル |
-| 2 | `STB_WEAK` | ウィークシンボル |
+| 0 | `STB_LOCAL` | ファイル内のみ有効 |
+| 1 | `STB_GLOBAL` | 他ファイルから参照可能 |
+| 2 | `STB_WEAK` | 同名のGLOBALがあれば置き換えられる |
 
-**タイプ**
+**タイプ（下位4ビット）**
 
 | 値 | 名前 | 説明 |
 |----|------|------|
@@ -166,18 +276,29 @@ typedef struct
 | 3 | `STT_SECTION` | セクション |
 | 4 | `STT_FILE` | ファイル名 |
 
-### st_shndx
-
-シンボルが所属するセクションのインデックス。特殊な値として次がある。
+### st_shndxの特殊な値
 
 | 値 | 名前 | 説明 |
 |----|------|------|
 | 0 | `SHN_UNDEF` | 未定義（外部参照） |
 | 0xfff1 | `SHN_ABS` | 絶対値 |
 
+`main.o`のシンボル`x`は`Ndx`が`UND`（0）となっており、外部で定義されていることを示す。リンカーはこのような未定義シンボルを解決する。
+
 ## 再配置エントリ
 
 再配置エントリはリンク時に調整が必要な場所を示す。
+
+### readelfでの確認
+
+```sh
+$ readelf -r main.o
+Relocation section '.rela.text' at offset 0x178 contains 1 entry:
+  Offset          Info           Type           Sym. Value    Sym. Name + Addend
+000000000000  000900000112 R_AARCH64_ADR_PRE 0000000000000000 x + 0
+```
+
+### elf.hの構造体定義
 
 ```c:/usr/include/elf.h
 typedef struct
@@ -188,17 +309,30 @@ typedef struct
 } Elf64_Rela;
 ```
 
-| フィールド | サイズ | 説明 |
-|-----------|--------|------|
-| `r_offset` | 8バイト | 再配置を適用する位置 |
-| `r_info` | 8バイト | 再配置タイプとシンボルインデックス |
-| `r_addend` | 8バイト | 加算値 |
+### readelf出力との対応
 
-### r_info
+| readelf出力 | 構造体フィールド | サイズ | 説明 |
+|-------------|-----------------|--------|------|
+| Offset | `r_offset` | 8バイト | 再配置を適用する位置 |
+| Info | `r_info` | 8バイト | タイプとシンボルインデックス |
+| Type | `r_info`の下位32ビット | - | 再配置タイプ |
+| Sym. Value | （シンボルの値） | - | 参照先シンボルの値 |
+| Sym. Name | （シンボル名） | - | `r_info`の上位32ビットでシンボルを参照 |
+| Addend | `r_addend` | 8バイト | 加算値 |
 
-`r_info`は上位32ビットがシンボルインデックス、下位32ビットが再配置タイプを表す。
+### r_infoのエンコーディング
 
-本書で扱う再配置タイプは次のとおり。
+```c
+#define ELF64_R_SYM(info)            ((info) >> 32)
+#define ELF64_R_TYPE(info)           ((info) & 0xffffffff)
+#define ELF64_R_INFO(sym, type)      (((Elf64_Xword)(sym) << 32) + (type))
+```
+
+`Info`の値`000900000112`を解析すると：
+- 上位32ビット: `0x0009` → シンボルインデックス9（`x`）
+- 下位32ビット: `0x00000112` = 274 → `R_AARCH64_ADR_PREL_LO21`
+
+### 本書で扱う再配置タイプ
 
 | 値 | 名前 | 説明 |
 |----|------|------|
@@ -206,7 +340,26 @@ typedef struct
 
 ## プログラムヘッダー
 
-プログラムヘッダーは実行時にOSがメモリにロードするセグメントを定義する。
+プログラムヘッダーは実行時にOSがメモリにロードするセグメントを定義する。オブジェクトファイル（`.o`）には存在せず、実行可能ファイルに含まれる。
+
+### readelfでの確認
+
+```sh
+$ readelf -l a.out
+Elf file type is EXEC (Executable file)
+Entry point 0x400078
+There are 2 program headers, starting at offset 64
+
+Program Headers:
+  Type           Offset             VirtAddr           PhysAddr
+                 FileSiz            MemSiz              Flags  Align
+  LOAD           0x0000000000000000 0x0000000000400000 0x0000000000400000
+                 0x0000000000000088 0x0000000000000088  R E    0x10000
+  LOAD           0x0000000000000088 0x0000000000410088 0x0000000000410088
+                 0x0000000000000004 0x0000000000000004  RW     0x10000
+```
+
+### elf.hの構造体定義
 
 ```c:/usr/include/elf.h
 typedef struct
@@ -222,41 +375,45 @@ typedef struct
 } Elf64_Phdr;
 ```
 
-| フィールド | サイズ | 説明 |
-|-----------|--------|------|
-| `p_type` | 4バイト | セグメントタイプ |
-| `p_flags` | 4バイト | セグメントフラグ |
-| `p_offset` | 8バイト | ファイル内のオフセット |
-| `p_vaddr` | 8バイト | 仮想アドレス |
-| `p_paddr` | 8バイト | 物理アドレス |
-| `p_filesz` | 8バイト | ファイル内のサイズ |
-| `p_memsz` | 8バイト | メモリ内のサイズ |
-| `p_align` | 8バイト | アラインメント |
+### readelf出力との対応
 
-### セグメントタイプ
+| readelf出力 | 構造体フィールド | サイズ | 説明 |
+|-------------|-----------------|--------|------|
+| Type | `p_type` | 4バイト | セグメントタイプ |
+| Offset | `p_offset` | 8バイト | ファイル内のオフセット |
+| VirtAddr | `p_vaddr` | 8バイト | 仮想アドレス |
+| PhysAddr | `p_paddr` | 8バイト | 物理アドレス |
+| FileSiz | `p_filesz` | 8バイト | ファイル内のサイズ |
+| MemSiz | `p_memsz` | 8バイト | メモリ内のサイズ |
+| Flags | `p_flags` | 4バイト | セグメントフラグ |
+| Align | `p_align` | 8バイト | アラインメント |
 
-| 値 | 名前 | 説明 |
-|----|------|------|
-| 1 | `PT_LOAD` | ロード可能セグメント |
-
-### セグメントフラグ
+### セグメントタイプ（p_type）
 
 | 値 | 名前 | 説明 |
 |----|------|------|
-| 0x1 | `PF_X` | 実行可能 |
-| 0x2 | `PF_W` | 書き込み可能 |
-| 0x4 | `PF_R` | 読み取り可能 |
+| 1 | `PT_LOAD` | メモリにロードするセグメント |
 
-## 文字列テーブル
+### セグメントフラグ（p_flags）
 
-文字列テーブルはNULL終端の文字列を連続して格納する。
-シンボル名やセクション名は、文字列テーブル内のオフセットとして参照される。
+| 値 | 名前 | readelf表示 | 説明 |
+|----|------|-------------|------|
+| 0x1 | `PF_X` | E | 実行可能 |
+| 0x2 | `PF_W` | W | 書き込み可能 |
+| 0x4 | `PF_R` | R | 読み取り可能 |
 
-```
-オフセット: 0   1   2   3   4   5   6   7   8   9  10  11
-データ:    \0   x  \0   _   s   t   a   r   t  \0  ...
-```
+1つ目のLOADセグメント（`R E`）はコード領域、2つ目のLOADセグメント（`RW`）はデータ領域である。
 
-オフセット1から始まる文字列は`x`、オフセット3から始まる文字列は`_start`となる。
+## まとめ
 
-これでELFバイナリの構造の理解が深まった。次章からは、この知識を使ってELFパーサーを実装していく。
+本章では、readelf出力とelf.h定義を照らし合わせながら、ELFバイナリの構造を学んだ。
+
+パーサー実装において重要なポイント：
+
+1. **ELFヘッダー**から`e_shoff`と`e_shnum`を読み取り、セクションヘッダーの位置を特定する
+2. **セクションヘッダー**の`sh_link`を使って、関連する文字列テーブルを参照する
+3. **文字列テーブル**からオフセットを使って文字列を取得する
+4. **シンボルテーブル**の`st_info`は上位4ビットと下位4ビットに分離して解釈する
+5. **再配置エントリ**の`r_info`も同様に上位32ビットと下位32ビットに分離する
+
+次章では、この知識を使ってELFパーサーを実装していく。

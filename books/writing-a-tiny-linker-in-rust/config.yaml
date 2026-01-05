@@ -6,8 +6,8 @@ published: false
 price: 0
 chapters:
   - 01_intro
-  - 02_about_object_file
-  - 03_intro_linker
+  - 02_intro_linker
+  - 03_about_object_file
   - 04_elf_binary_structure
   - 05_impl_parser_header
   - 06_impl_parser_section_symbol
