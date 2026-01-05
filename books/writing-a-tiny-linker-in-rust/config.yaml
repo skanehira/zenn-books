@@ -7,8 +7,7 @@ price: 0
 chapters:
   - 01_intro
   - 02_intro_linker
-  - 03_about_object_file
-  - 04_elf_binary_structure
+  - 03_elf_binary_structure
   - 05_impl_parser_header
   - 06_impl_parser_section_symbol
   - 07_impl_parser_relocation

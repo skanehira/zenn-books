@@ -2,9 +2,65 @@
 title: "ELFバイナリの構造"
 ---
 
-本章では、`readelf`の出力と`/usr/include/elf.h`の構造体定義を照らし合わせながら、ELFバイナリの構造を理解していく。実際のバイナリを見ながら学ぶことで、パーサー実装のイメージを掴むことができる。
+本章では、オブジェクトファイルの概要を説明した後、`readelf`の出力と`/usr/include/elf.h`の構造体定義を照らし合わせながら、ELFバイナリの構造を理解していく。
 
-前章で作成した`sub.o`を使って確認していく。
+## オブジェクトファイルとは
+
+オブジェクトファイルとは、コンパイラがソースコード（CやRustなど）をコンパイルした結果の中間ファイルである。本書で扱う`main.o`や`sub.o`がオブジェクトファイルにあたる。
+
+オブジェクトファイルはOSによってフォーマットが異なる。
+
+| OS | フォーマット |
+|----|-------------|
+| Unix/Linux | ELF（Executable and Linkable Format） |
+| macOS | Mach-O（Mach Object） |
+| Windows | COFF（Common Object File Format） |
+
+本書で実装するリンカーはARM64 Linux向けなので、ELFフォーマットを扱う。
+
+## ELFファイルの全体構造
+
+ELFファイルは次のような構造になっている。
+
+```
+┌──────────────────┐
+│ ELF Header       │  ← ファイルの基本情報
+├──────────────────┤
+│ Program Header   │  ← 実行可能ファイル用（OSがメモリにロードする際に使用）
+├──────────────────┤
+│ .text            │  ← コード（機械語）
+├──────────────────┤
+│ .data            │  ← 初期化済みデータ
+├──────────────────┤
+│ .symtab          │  ← シンボルテーブル
+├──────────────────┤
+│ .strtab          │  ← 文字列テーブル（シンボル名）
+├──────────────────┤
+│ .rela.text       │  ← リロケーション情報
+├──────────────────┤
+│ ...              │
+├──────────────────┤
+│ Section Header   │  ← リンカー用（各セクションの情報）
+│ Table            │
+└──────────────────┘
+```
+
+オブジェクトファイルはリンカーが読み取るためのファイルなので、セクションヘッダーテーブルが重要となる。一方、実行可能ファイルはOSが実行するためのファイルなので、プログラムヘッダーテーブルが重要となる。
+
+以降、前章で作成した`sub.o`を使って各構造を詳しく説明する。
+
+## readelfコマンド
+
+`readelf`コマンドを使うとELFファイルの情報を確認できる。主なオプションは次のとおり。
+
+| オプション | 説明 |
+|-----------|------|
+| `-h` | ELFヘッダーを表示 |
+| `-S` | セクションヘッダーを表示 |
+| `-s` | シンボルテーブルを表示 |
+| `-r` | リロケーション情報を表示 |
+| `-l` | プログラムヘッダーを表示 |
+| `-a` | すべての情報を表示 |
 
 ## ELFヘッダー
 
@@ -18,75 +74,45 @@ ELF Header:
   Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00
   Class:                             ELF64
   Data:                              2's complement, little endian
-  Version:                           1 (current)
-  OS/ABI:                            UNIX - System V
-  ABI Version:                       0
+  ...
   Type:                              REL (Relocatable file)
   Machine:                           AArch64
-  Version:                           0x1
-  Entry point address:               0x0
-  Start of program headers:          0 (bytes into file)
+  ...
   Start of section headers:          416 (bytes into file)
-  Flags:                             0x0
-  Size of this header:               64 (bytes)
-  Size of program headers:           0 (bytes)
-  Number of program headers:         0
-  Size of section headers:           64 (bytes)
+  ...
   Number of section headers:         9
   Section header string table index: 8
 ```
 
-### elf.hの構造体定義
+本書のリンカー実装で必要な項目を抜粋して説明する。
 
-```c:/usr/include/elf.h
-typedef struct
-{
-  unsigned char e_ident[EI_NIDENT];     /* Magic number and other info */
-  Elf64_Half    e_type;                 /* Object file type */
-  Elf64_Half    e_machine;              /* Architecture */
-  Elf64_Word    e_version;              /* Object file version */
-  Elf64_Addr    e_entry;                /* Entry point virtual address */
-  Elf64_Off     e_phoff;                /* Program header table file offset */
-  Elf64_Off     e_shoff;                /* Section header table file offset */
-  Elf64_Word    e_flags;                /* Processor-specific flags */
-  Elf64_Half    e_ehsize;               /* ELF header size in bytes */
-  Elf64_Half    e_phentsize;            /* Program header table entry size */
-  Elf64_Half    e_phnum;                /* Program header table entry count */
-  Elf64_Half    e_shentsize;            /* Section header table entry size */
-  Elf64_Half    e_shnum;                /* Section header table entry count */
-  Elf64_Half    e_shstrndx;             /* Section header string table index */
-} Elf64_Ehdr;
-```
+### 主要フィールドの説明
 
-### readelf出力との対応
+| readelf出力 | 構造体フィールド | 説明 |
+|-------------|-----------------|------|
+| Magic | `e_ident[0-3]` | マジックナンバー（`0x7f, 'E', 'L', 'F'`）。ELFファイルであることを識別 |
+| Class | `e_ident[4]` | ファイルクラス。2ならELF64 |
+| Data | `e_ident[5]` | エンディアン。1ならリトルエンディアン |
+| Type | `e_type` | ファイルタイプ。1=REL（オブジェクトファイル）、2=EXEC（実行可能） |
+| Machine | `e_machine` | アーキテクチャ。183=AArch64 |
+| Start of section headers | `e_shoff` | セクションヘッダーテーブルのファイル内オフセット |
+| Number of section headers | `e_shnum` | セクションの数 |
+| Section header string table index | `e_shstrndx` | セクション名文字列テーブルのインデックス |
 
-| readelf出力 | 構造体フィールド | サイズ | 値の例 |
-|-------------|-----------------|--------|--------|
-| Magic | `e_ident[0-3]` | 4バイト | `7f 45 4c 46`（`\x7fELF`） |
-| Class | `e_ident[4]` | 1バイト | 2（ELF64） |
-| Data | `e_ident[5]` | 1バイト | 1（リトルエンディアン） |
-| Type | `e_type` | 2バイト | 1（REL=オブジェクトファイル） |
-| Machine | `e_machine` | 2バイト | 183（AArch64） |
-| Entry point address | `e_entry` | 8バイト | 0x0（オブジェクトファイルでは0） |
-| Start of section headers | `e_shoff` | 8バイト | 416 |
-| Size of this header | `e_ehsize` | 2バイト | 64 |
-| Number of section headers | `e_shnum` | 2バイト | 9 |
-| Section header string table index | `e_shstrndx` | 2バイト | 8 |
+パーサーを実装する際は、`e_shoff`と`e_shnum`を使ってセクションヘッダーの位置と数を特定する。`e_shstrndx`はセクション名を取得する際に使用する。
 
-パーサーを実装する際は、この順番でバイト列を読み取っていく。`e_shoff`（セクションヘッダーのオフセット）と`e_shnum`（セクション数）を使って、セクションヘッダーをパースできる。
+### e_ident（ELF識別子）
 
-### e_ident（ELF識別子）の詳細
+`e_ident`は16バイトの配列で、ELFファイルの基本情報を格納する。名前列は`elf.h`で定義されている定数名である。
 
-`e_ident`は16バイトの配列で、ELFファイルの基本情報を格納する。
-
-| オフセット | 名前 | 説明 | 値の例 |
-|-----------|------|------|--------|
-| 0-3 | `EI_MAG0-3` | マジックナンバー | `0x7f, 'E', 'L', 'F'` |
-| 4 | `EI_CLASS` | ファイルクラス | 2=64bit |
-| 5 | `EI_DATA` | エンディアン | 1=リトルエンディアン |
-| 6 | `EI_VERSION` | ELFバージョン | 1 |
-| 7 | `EI_OSABI` | OS/ABI | 0=System V |
-| 8-15 | `EI_PAD` | パディング | 0 |
+| オフセット | 名前                 | 説明             | 値の例                |
+|------------|----------------------|------------------|-----------------------|
+| 0-3        | `EI_MAG0`〜`EI_MAG3` | マジックナンバー | `0x7f, 'E', 'L', 'F'` |
+| 4          | `EI_CLASS`           | ファイルクラス   | 2=64bit               |
+| 5          | `EI_DATA`            | エンディアン     | 1=リトルエンディアン  |
+| 6          | `EI_VERSION`         | ELFバージョン    | 1                     |
+| 7          | `EI_OSABI`           | OS/ABI           | 0=System V            |
+| 8-15       | `EI_PAD`             | パディング       | 0                     |
 
 パーサーではまずマジックナンバー（`0x7f, 'E', 'L', 'F'`）を確認し、ELFファイルであることを検証する。
 
@@ -150,7 +176,7 @@ typedef struct
 | Flags | `sh_flags` | 8バイト | セクションの属性 |
 | Link | `sh_link` | 4バイト | 関連セクションへのリンク |
 | Info | `sh_info` | 4バイト | 追加情報 |
-| Align | `sh_addralign` | 8バイト | アラインメント |
+| Align | `sh_addralign` | 8バイト | アラインメント（配置境界。4なら4バイト境界に配置） |
 | EntSize | `sh_entsize` | 8バイト | エントリサイズ（テーブルの場合） |
 
 `sh_name`は文字列テーブル（`.shstrtab`）内のオフセットであり、実際のセクション名はそこから取得する必要がある。
