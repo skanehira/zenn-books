@@ -4,6 +4,114 @@ title: "実行バイナリの生成"
 
 本章では、これまで実装してきたすべての処理を統合し、実行可能バイナリを生成する。
 
+## 本章で実装するファイル
+
+```
+src/
+├── main.rs            # 本章
+└── linker/
+    └── mod.rs         # 本章（link_to_file追加）
+```
+
+## link_to_file関数の実装
+
+### テストを書く
+
+`src/linker/mod.rs`にテストを追加する。
+
+```diff:src/linker/mod.rs
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    use crate::parser::Elf;
+
+     #[test]
+     fn add_object() {
+         // ... 既存のテスト
+     }
++
++    #[test]
++    fn link_to_file() {
++        let main_o = include_bytes!("../parser/fixtures/main.o").to_vec();
++        let sub_o = include_bytes!("../parser/fixtures/sub.o").to_vec();
++
++        let mut linker = Linker::new();
++        let output = linker.link_to_file(vec![main_o, sub_o]).unwrap();
++
++        // ELFマジックナンバー
++        assert_eq!(&output[0..4], &[0x7f, b'E', b'L', b'F']);
++
++        // ファイルタイプ（EXEC = 2）
++        assert_eq!(output[16], 2);
++
++        // マシン（AArch64 = 0xb7）
++        assert_eq!(output[18], 0xb7);
++    }
+ }
+```
+
+### link_to_file関数を実装する
+
+```diff:src/linker/mod.rs
++use std::io::Cursor;
++
++use crate::error::{LinkerError, Result};
+ use crate::parser::Elf;
+
+ #[derive(Debug, Default)]
+ pub struct Linker {
+     pub objects: Vec<Elf>,
+     pub object_names: Vec<String>,
+ }
+
+ impl Linker {
+     pub fn new() -> Self {
+         Self::default()
+     }
+
+     pub fn add_object(&mut self, name: String, obj: Elf) {
+         self.object_names.push(name);
+         self.objects.push(obj);
+     }
++
++    pub fn link_to_file(&mut self, inputs: Vec<Vec<u8>>) -> Result<Vec<u8>> {
++        // 1. 入力ファイルをパース
++        for (idx, input) in inputs.iter().enumerate() {
++            let obj = Elf::parse(input).map_err(|e| LinkerError::Parse(format!("{:?}", e)))?;
++            self.add_object(format!("input_{}", idx), obj);
++        }
++
++        // 2. シンボル解決
++        let mut resolved_symbols = self.resolve_symbols()?;
++
++        // 3. セクション配置
++        let (output_sections, section_name_offsets) =
++            self.layout_sections(&mut resolved_symbols)?;
++
++        // 4. 実行可能ファイルを書き出し
++        let mut out = Cursor::new(Vec::new());
++        self.write_executable(
++            &mut out,
++            resolved_symbols,
++            output_sections,
++            section_name_offsets,
++        )?;
++
++        Ok(out.into_inner())
++    }
+ }
+```
+
+### テストを実行する
+
+```sh
+$ cargo test linker::tests::link_to_file
+running 1 test
+test linker::tests::link_to_file ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
 ## main関数の実装
 
 CLIインターフェースを実装する。
@@ -15,8 +123,8 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::process;
 
-use yui::error::LinkerError;
-use yui::linker::Linker;
+use tiny_linker::error::LinkerError;
+use tiny_linker::linker::Linker;
 
 fn main() -> Result<(), LinkerError> {
     let args: Vec<String> = env::args().collect();
@@ -51,48 +159,8 @@ fn create_output_file(path: &Path) -> Result<std::fs::File, std::io::Error> {
         .write(true)
         .truncate(true)
         .create(true)
-        .mode(0o755)  // rwxr-xr-x
+        .mode(0o755) // rwxr-xr-x
         .open(path)
-}
-```
-
-## Linkerのlink_to_file関数
-
-リンク処理全体を実行する関数を実装する。
-
-```rust:src/linker/mod.rs
-use std::io::Cursor;
-use crate::error::Result;
-use crate::parser;
-
-impl Linker {
-    pub fn link_to_file(&mut self, inputs: Vec<Vec<u8>>) -> Result<Vec<u8>> {
-        // 1. 入力ファイルをパース
-        for (idx, input) in inputs.iter().enumerate() {
-            let obj = parser::parse_elf(input)
-                .map_err(|e| LinkerError::Parse(format!("{:?}", e)))?
-                .1;
-            self.add_object(format!("input_{}", idx), obj);
-        }
-
-        // 2. シンボル解決
-        let mut resolved_symbols = self.resolve_symbols()?;
-
-        // 3. セクション配置
-        let (output_sections, section_name_offsets) =
-            self.layout_sections(&mut resolved_symbols)?;
-
-        // 4. 実行可能ファイルを書き出し
-        let mut out = Cursor::new(Vec::new());
-        self.write_executable(
-            &mut out,
-            resolved_symbols,
-            output_sections,
-            section_name_offsets,
-        )?;
-
-        Ok(out.into_inner())
-    }
 }
 ```
 
@@ -127,7 +195,7 @@ $ gcc -c sub.c -o sub.o
 
 ```sh
 $ cargo build --release
-$ ./target/release/yui a.out main.o sub.o
+$ ./target/release/tiny-linker a.out main.o sub.o
 Linked successfully: a.out
 ```
 

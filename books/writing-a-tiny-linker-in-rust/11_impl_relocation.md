@@ -4,6 +4,39 @@ title: "再配置の適用"
 
 本章では、再配置の適用を実装する。再配置は、シンボル参照を実際のメモリアドレスに書き換える処理である。
 
+## 本章で実装するファイル
+
+```
+src/
+├── error.rs               # 本章（エラー追加）
+├── linker/
+│   ├── mod.rs             # 本章（モジュール追加）
+│   ├── relocation.rs      # 本章
+│   └── section.rs         # 本章（スタブを削除）
+└── ...
+```
+
+## モジュール構造を更新する
+
+LSPが正しく動作するように、最初にモジュール宣言を追加する。
+
+### linker/mod.rsを更新する
+
+```diff:src/linker/mod.rs
+ pub mod output;
++pub mod relocation;
+ pub mod section;
+ pub mod symbol;
+
+ use crate::parser::Elf;
+```
+
+### 空のモジュールファイルを作成する
+
+```sh
+$ touch src/linker/relocation.rs
+```
+
 ## 再配置の基本原理
 
 再配置では次の処理を行う。
@@ -55,130 +88,213 @@ ADR命令は32ビットで、次のようなビットフィールドを持つ。
 
 21ビットの即値は`immhi`と`immlo`に分割されて格納される。
 
+## エラー型の追加
+
+### エラーを追加する
+
+```diff:src/error.rs
+     #[error("IO error: {0}")]
+     Io(#[from] std::io::Error),
++
++    #[error("Relocation error: {message}")]
++    RelocationError { message: String },
++
++    #[error("Section not found: {name}")]
++    SectionNotFound { name: String },
+ }
+```
+
 ## 再配置の実装
 
+### テストを書く
+
+`src/linker/relocation.rs`にテストを書く。
+
 ```rust:src/linker/relocation.rs
-use std::collections::HashMap;
-use crate::elf::relocation::{RelocationAddend, RelocationType};
-use crate::error::{LinkerError, Result};
-use super::Linker;
-use super::output::{ResolvedSymbol, Section};
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::linker::Linker;
+    use crate::parser::Elf;
 
-impl Linker {
-    pub fn apply_relocations(
-        &self,
-        output_sections: &mut [Section<'static>],
-        resolved_symbols: &HashMap<String, ResolvedSymbol>,
-    ) -> Result<()> {
-        // セクション名からインデックスへのマップを作成
-        let section_indices: HashMap<String, usize> = output_sections
-            .iter()
-            .enumerate()
-            .map(|(i, sec)| (sec.name.to_string(), i))
-            .collect();
+    #[test]
+    fn apply_relocations() {
+        let main_o = include_bytes!("../parser/fixtures/main.o");
+        let sub_o = include_bytes!("../parser/fixtures/sub.o");
 
-        // 各オブジェクトファイルの再配置を処理
-        for (obj_idx, obj) in self.objects.iter().enumerate() {
-            for reloc in &obj.relocations {
-                self.process_relocation(
-                    obj_idx,
-                    reloc,
-                    output_sections,
-                    &section_indices,
-                    resolved_symbols,
-                )?;
-            }
-        }
+        let mut linker = Linker::new();
+        linker.add_object("main.o".to_string(), Elf::parse(main_o).unwrap());
+        linker.add_object("sub.o".to_string(), Elf::parse(sub_o).unwrap());
 
-        Ok(())
-    }
+        let mut resolved = linker.resolve_symbols().unwrap();
+        let (sections, _) = linker.layout_sections(&mut resolved).unwrap();
 
-    fn process_relocation(
-        &self,
-        obj_idx: usize,
-        reloc: &RelocationAddend,
-        output_sections: &mut [Section<'static>],
-        section_indices: &HashMap<String, usize>,
-        resolved_symbols: &HashMap<String, ResolvedSymbol>,
-    ) -> Result<()> {
-        match reloc.info.r#type {
-            RelocationType::Aarch64AdrPrelLo21 => {
-                // シンボルインデックスを取得
-                let symbol_index = reloc.info.symbol_index as usize;
-                if symbol_index >= self.objects[obj_idx].symbols.len() {
-                    return Err(LinkerError::RelocationError {
-                        message: format!("Symbol index out of range: {}", symbol_index),
-                    });
-                }
+        // .textセクションの最初の命令が書き換えられている
+        let text = sections.iter().find(|s| s.name == ".text").unwrap();
 
-                // シンボル名を取得
-                let symbol_name = &self.objects[obj_idx].symbols[symbol_index].name;
-
-                // 解決済みシンボルを取得
-                let resolved_symbol = resolved_symbols
-                    .get(symbol_name)
-                    .ok_or_else(|| LinkerError::RelocationError {
-                        message: format!("Symbol not resolved: {}", symbol_name),
-                    })?;
-
-                // .textセクションを取得
-                let text_section_idx = section_indices
-                    .get(".text")
-                    .ok_or_else(|| LinkerError::SectionNotFound {
-                        name: ".text".to_string(),
-                    })?;
-
-                let target_section = &mut output_sections[*text_section_idx];
-
-                // 再配置オフセットの範囲チェック
-                if reloc.offset as usize >= target_section.data.len() {
-                    return Err(LinkerError::RelocationError {
-                        message: format!("Offset out of range: {}", reloc.offset),
-                    });
-                }
-
-                // アドレスを計算
-                let instruction_addr = target_section.addr + reloc.offset;
-                let symbol_addr = resolved_symbol.value;
-
-                // 相対アドレスを計算
-                // relative_addr = シンボルアドレス - 命令アドレス + addend
-                let relative_addr =
-                    ((symbol_addr as i64) - (instruction_addr as i64) + reloc.addend) as i32;
-
-                // 命令を取得
-                let pos = reloc.offset as usize;
-                let data = target_section.data.to_mut();
-                let instruction = u32::from_le_bytes(
-                    data[pos..pos + 4].try_into().unwrap()
-                );
-
-                // オペコードとレジスタ部分を保持
-                // ADR命令: ビット28-24が10000、ビット0-4がレジスタ
-                let opcode_rd = instruction & 0x9F00001F;
-
-                // 即値をエンコード
-                // immlo: 下位2ビット → ビット29-30
-                let immlo = ((relative_addr & 0x3) as u32) << 29;
-                // immhi: 上位19ビット → ビット5-23
-                let immhi = (((relative_addr >> 2) & 0x7FFFF) as u32) << 5;
-
-                // 新しい命令を組み立て
-                let new_instruction = opcode_rd | immlo | immhi;
-
-                // 命令を書き換え
-                data[pos..pos + 4].copy_from_slice(&new_instruction.to_le_bytes());
-            }
-            _ => {
-                return Err(LinkerError::RelocationError {
-                    message: format!("Unsupported relocation type: {:?}", reloc.info.r#type),
-                });
-            }
-        }
-
-        Ok(())
+        // ADR命令がエンコードされていることを確認
+        // 命令のオペコード部分（ビット28-24）が10000であること
+        let instruction = u32::from_le_bytes(text.data[0..4].try_into().unwrap());
+        let opcode = (instruction >> 24) & 0x1F;
+        assert_eq!(opcode, 0x10); // ADR命令のオペコード
     }
 }
+```
+
+### 再配置処理を実装する
+
+```diff:src/linker/relocation.rs
++use std::collections::HashMap;
++
++use crate::elf::relocation::RelocationType;
++use crate::error::{LinkerError, Result};
++
++use super::output::{ResolvedSymbol, Section};
++use super::Linker;
++
++impl Linker {
++    pub fn apply_relocations(
++        &self,
++        output_sections: &mut [Section<'static>],
++        resolved_symbols: &HashMap<String, ResolvedSymbol>,
++    ) -> Result<()> {
++        // セクション名からインデックスへのマップを作成
++        let section_indices: HashMap<String, usize> = output_sections
++            .iter()
++            .enumerate()
++            .map(|(i, sec)| (sec.name.to_string(), i))
++            .collect();
++
++        // 各オブジェクトファイルの再配置を処理
++        for (obj_idx, obj) in self.objects.iter().enumerate() {
++            for reloc in &obj.relocations {
++                self.process_relocation(
++                    obj_idx,
++                    reloc,
++                    output_sections,
++                    &section_indices,
++                    resolved_symbols,
++                )?;
++            }
++        }
++
++        Ok(())
++    }
++
++    fn process_relocation(
++        &self,
++        obj_idx: usize,
++        reloc: &crate::elf::relocation::Rela,
++        output_sections: &mut [Section<'static>],
++        section_indices: &HashMap<String, usize>,
++        resolved_symbols: &HashMap<String, ResolvedSymbol>,
++    ) -> Result<()> {
++        match reloc.info.r#type {
++            RelocationType::Aarch64AdrPrelLo21 => {
++                // シンボルインデックスを取得
++                let symbol_index = reloc.info.symbol_index as usize;
++                if symbol_index >= self.objects[obj_idx].symbols.len() {
++                    return Err(LinkerError::RelocationError {
++                        message: format!("Symbol index out of range: {}", symbol_index),
++                    });
++                }
++
++                // シンボル名を取得
++                let symbol_name = &self.objects[obj_idx].symbols[symbol_index].name;
++
++                // 解決済みシンボルを取得
++                let resolved_symbol = resolved_symbols
++                    .get(symbol_name)
++                    .ok_or_else(|| LinkerError::RelocationError {
++                        message: format!("Symbol not resolved: {}", symbol_name),
++                    })?;
++
++                // .textセクションを取得
++                let text_section_idx = section_indices
++                    .get(".text")
++                    .ok_or_else(|| LinkerError::SectionNotFound {
++                        name: ".text".to_string(),
++                    })?;
++
++                let target_section = &mut output_sections[*text_section_idx];
++
++                // 再配置オフセットの範囲チェック
++                if reloc.offset as usize >= target_section.data.len() {
++                    return Err(LinkerError::RelocationError {
++                        message: format!("Offset out of range: {}", reloc.offset),
++                    });
++                }
++
++                // アドレスを計算
++                let instruction_addr = target_section.addr + reloc.offset;
++                let symbol_addr = resolved_symbol.value;
++
++                // 相対アドレスを計算
++                // relative_addr = シンボルアドレス - 命令アドレス + addend
++                let relative_addr =
++                    ((symbol_addr as i64) - (instruction_addr as i64) + reloc.addend) as i32;
++
++                // 命令を取得
++                let pos = reloc.offset as usize;
++                let data = target_section.data.to_mut();
++                let instruction =
++                    u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
++
++                // オペコードとレジスタ部分を保持
++                // ADR命令: ビット28-24が10000、ビット0-4がレジスタ
++                let opcode_rd = instruction & 0x9F00001F;
++
++                // 即値をエンコード
++                // immlo: 下位2ビット → ビット29-30
++                let immlo = ((relative_addr & 0x3) as u32) << 29;
++                // immhi: 上位19ビット → ビット5-23
++                let immhi = (((relative_addr >> 2) & 0x7FFFF) as u32) << 5;
++
++                // 新しい命令を組み立て
++                let new_instruction = opcode_rd | immlo | immhi;
++
++                // 命令を書き換え
++                data[pos..pos + 4].copy_from_slice(&new_instruction.to_le_bytes());
++            }
++            _ => {
++                return Err(LinkerError::RelocationError {
++                    message: format!("Unsupported relocation type: {:?}", reloc.info.r#type),
++                });
++            }
++        }
++
++        Ok(())
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+```
+
+### section.rsのスタブを削除する
+
+前章で追加したスタブを削除する。
+
+```diff:src/linker/section.rs
+-    // 次章で実装
+-    pub fn apply_relocations(
+-        &self,
+-        _sections: &mut Vec<Section<'static>>,
+-        _resolved_symbols: &HashMap<String, ResolvedSymbol>,
+-    ) -> Result<()> {
+-        Ok(())
+-    }
+ }
+```
+
+### テストを実行する
+
+```sh
+$ cargo test linker::relocation
+running 1 test
+test linker::relocation::tests::apply_relocations ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 
 ## 再配置の計算例
@@ -221,5 +337,14 @@ new_instruction = opcode_rd | immlo | immhi
 ```
 
 これでADR命令が正しくエンコードされ、実行時に`x0`レジスタに`x`のアドレスがロードされる。
+
+## まとめ
+
+本章では再配置の適用を実装した。
+
+- モジュール宣言を先に追加してLSPを有効化
+- `R_AARCH64_ADR_PREL_LO21`は21ビットのPC相対アドレスをエンコード
+- 即値は`immlo`（下位2ビット）と`immhi`（上位19ビット）に分割
+- 相対アドレス = シンボルアドレス - 命令アドレス + addend
 
 次章では、ELF出力の実装を行う。

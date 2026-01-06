@@ -91,7 +91,7 @@ int x = 11;
 
 ```sh
 $ gcc -c main.c -o main.o && gcc -c sub.c -o sub.o
-$ ./yui a.out main.o sub.o
+$ ./tiny-linker a.out main.o sub.o
 $ ./a.out
 $ echo $?
 11

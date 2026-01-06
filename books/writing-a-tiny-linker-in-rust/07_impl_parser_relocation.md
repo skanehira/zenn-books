@@ -2,11 +2,68 @@
 title: "ELFパーサーの実装（3）再配置情報"
 ---
 
-本章では、再配置情報のパースを実装し、ELFパーサー全体を統合する。
+本章では、再配置情報のパースを実装し、ELFパーサーを完成させる。
 
-## 再配置エントリのデータ構造
+## 本章で実装するファイル
 
-再配置エントリのデータ構造を定義する。
+```
+src/
+├── elf/
+│   └── relocation.rs    # 本章
+├── parser/
+│   ├── error.rs         # 本章（エラー追加）
+│   └── relocation.rs    # 本章
+├── parser.rs            # 本章（ELF構造体追加）
+└── ...
+```
+
+## モジュール構造を更新する
+
+LSPが正しく動作するように、最初にモジュール宣言を追加する。
+
+### elf.rsを更新する
+
+```diff:src/elf.rs
+ pub mod header;
++pub mod relocation;
+ pub mod section;
+ pub mod symbol;
+```
+
+### parser.rsを更新する
+
+```diff:src/parser.rs
+ pub mod error;
+ pub mod header;
+ pub mod helper;
++pub mod relocation;
+ pub mod section;
+ pub mod symbol;
+
+ use error::ParseError;
+
+ pub type ParseResult<'a, T> = nom::IResult<&'a [u8], T, ParseError>;
+```
+
+### 空のモジュールファイルを作成する
+
+```sh
+$ touch src/elf/relocation.rs src/parser/relocation.rs
+```
+
+## テスト用フィクスチャの追加
+
+再配置情報のテストには`main.o`が必要なので、フィクスチャに追加する。
+
+```sh
+$ gcc -c main.c -o src/parser/fixtures/main.o
+```
+
+## 再配置情報のパース
+
+### データ構造を定義する
+
+`src/elf/relocation.rs`を実装する。
 
 ```rust:src/elf/relocation.rs
 #[derive(Default, Debug, PartialEq, Eq, Clone, Copy)]
@@ -25,205 +82,248 @@ pub struct Info {
 }
 
 #[derive(Default, Debug, PartialEq, Eq, Clone, Copy)]
-pub struct RelocationAddend {
+pub struct Rela {
     pub offset: u64,
     pub info: Info,
     pub addend: i64,
 }
 ```
 
-`Info`は64ビットで、下位32ビットが再配置タイプ、上位32ビットがシンボルインデックスを表す。
+### パーサーエラーを追加する
 
-## 再配置情報のパース
+```diff:src/parser/error.rs
+     #[error("Invalid visibility: {0}")]
+     InvalidVisibility(u8),
++
++    #[error("Invalid relocation type: {0}")]
++    InvalidRelocationType(u32),
+ }
+```
 
-再配置情報をパースする関数を実装する。
+### テストを書く
+
+`src/parser/relocation.rs`にテストを書く。
 
 ```rust:src/parser/relocation.rs
-use nom::{
-    Parser as _,
-    combinator::map_res,
-    multi::count,
-    number::complete::{le_i64, le_u64},
-};
-use super::{ParseResult, error::ParseError};
-use crate::elf::{
-    relocation::{Info, RelocationAddend, RelocationType},
-    section,
-};
-
-impl TryFrom<u32> for RelocationType {
-    type Error = ParseError;
-
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
-        match value {
-            274 => Ok(Self::Aarch64AdrPrelLo21),
-            _ => Err(ParseError::InvalidRelocationType(value)),
-        }
-    }
-}
-
-impl TryFrom<u64> for Info {
-    type Error = ParseError;
-
-    fn try_from(value: u64) -> Result<Self, Self::Error> {
-        // 下位32ビットが再配置タイプ
-        let r#type = RelocationType::try_from((value & 0xffffffff) as u32)?;
-        // 上位32ビットがシンボルインデックス
-        let symbol_index = (value >> 32) as u32;
-        Ok(Info {
-            r#type,
-            symbol_index,
-        })
-    }
-}
-
-fn parse_info(raw: &[u8]) -> ParseResult<Info> {
-    map_res(le_u64, Info::try_from).parse(raw)
-}
-
-pub fn parse(section_headers: &[section::Header]) -> ParseResult<Vec<RelocationAddend>> {
-    // .rela.textセクションを探す
-    let Some(header) = section_headers
-        .iter()
-        .find(|&s| s.r#type == section::SectionType::Rela)
-    else {
-        return Ok((&[], vec![]));
-    };
-
-    let entry_count = (header.size / header.entsize) as usize;
-
-    let (rest, relocations) = count(
-        |raw| {
-            let (rest, offset) = le_u64(raw)?;
-            let (rest, info) = parse_info(rest)?;
-            let (rest, addend) = le_i64(rest)?;
-
-            let relocation = RelocationAddend {
-                offset,
-                info,
-                addend,
-            };
-
-            Ok((rest, relocation))
-        },
-        entry_count,
-    )
-    .parse(header.section_raw_data.as_ref())?;
-
-    Ok((rest, relocations))
-}
-```
-
-## R_AARCH64_ADR_PREL_LO21について
-
-本書で扱う再配置タイプは`R_AARCH64_ADR_PREL_LO21`（値274）のみである。
-
-これはARM64の`ADR`命令で使用される再配置タイプで、PC（プログラムカウンタ）からの相対アドレスを21ビットの即値としてエンコードする。
-
-`main.o`の再配置情報を確認すると次のようになっている。
-
-```sh
-$ readelf -r main.o
-Relocation section '.rela.text' at offset 0x178 contains 1 entry:
-  Offset          Info           Type           Sym. Value    Sym. Name + Addend
-000000000000  000900000112 R_AARCH64_ADR_PRE 0000000000000000 x + 0
-```
-
-- `Offset`: 0（`.text`セクションの先頭）
-- `Info`: シンボルインデックス9、タイプ274
-- `Sym. Name`: `x`
-- `Addend`: 0
-
-これは「`.text`セクションのオフセット0にある命令で、シンボル`x`への参照がある」ことを示している。
-
-## ELFパーサーの統合
-
-すべてのパース処理を統合し、ELF構造体を生成する関数を実装する。
-
-```rust:src/parser.rs
-pub mod error;
-pub mod header;
-pub mod helper;
-pub mod relocation;
-pub mod section;
-pub mod symbol;
-
-use crate::elf::{header::Header, relocation::RelocationAddend, section, symbol::Symbol};
-use error::ParseError;
-
-pub type ParseResult<'a, T> = nom::IResult<&'a [u8], T, ParseError>;
-
-#[derive(Debug)]
-pub struct ELF {
-    pub header: Header,
-    pub section_headers: Vec<section::Header>,
-    pub symbols: Vec<Symbol>,
-    pub relocations: Vec<RelocationAddend>,
-}
-
-pub fn parse_elf(raw: &[u8]) -> ParseResult<ELF> {
-    // ELFヘッダーをパース
-    let (_, header) = header::parse(raw)?;
-
-    // セクションヘッダーをパース
-    let (_, section_headers) = section::parse_header(
-        raw,
-        header.shoff as usize,
-        header.shstrndx as usize,
-        header.shnum as usize,
-    )?;
-
-    // シンボルテーブルをパース
-    let (_, symbols) = symbol::parse(raw, &section_headers)?;
-
-    // 再配置情報をパース
-    let (_, relocations) = relocation::parse(&section_headers)?;
-
-    Ok((
-        &[],
-        ELF {
-            header,
-            section_headers,
-            symbols,
-            relocations,
-        },
-    ))
-}
-```
-
-## テスト
-
-ELFパーサー全体のテストを実装する。
-
-```rust
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::elf::relocation::RelocationType;
 
     #[test]
-    fn should_parse_elf() {
-        let raw = include_bytes!("./parser/fixtures/main.o");
-        let (_, elf) = parse_elf(raw).unwrap();
+    fn parse_relocations() {
+        let raw = include_bytes!("./fixtures/main.o");
+        let (_, elf_header) = crate::parser::header::parse(raw).unwrap();
+        let (_, section_headers) = crate::parser::section::parse_headers(
+            raw,
+            elf_header.shoff as usize,
+            elf_header.shstrndx as usize,
+            elf_header.shnum as usize,
+        )
+        .unwrap();
 
-        // ELFヘッダーの確認
-        assert_eq!(elf.header.r#type, crate::elf::header::Type::Rel);
-        assert_eq!(elf.header.machine, crate::elf::header::Machine::AArch64);
+        let (_, relocations) = parse(&section_headers).unwrap();
 
-        // シンボルの確認
-        let start_symbol = elf.symbols.iter().find(|s| s.name == "_start");
-        assert!(start_symbol.is_some());
-
-        let x_symbol = elf.symbols.iter().find(|s| s.name == "x");
-        assert!(x_symbol.is_some());
-
-        // 再配置の確認
-        assert_eq!(elf.relocations.len(), 1);
+        assert_eq!(relocations.len(), 1);
+        assert_eq!(relocations[0].offset, 0);
         assert_eq!(
-            elf.relocations[0].info.r#type,
-            crate::elf::relocation::RelocationType::Aarch64AdrPrelLo21
+            relocations[0].info.r#type,
+            RelocationType::Aarch64AdrPrelLo21
         );
     }
 }
 ```
 
-これでELFパーサーの実装が完了した。次章では、リンク処理の仕組みを解説する。
+### パース処理を実装する
+
+```diff:src/parser/relocation.rs
++use super::ParseResult;
++use crate::elf::relocation::{Info, Rela, RelocationType};
++use crate::elf::section::{Header, SectionType};
++use crate::parser::error::ParseError;
++use nom::combinator::map_res;
++use nom::multi::count;
++use nom::number::complete::{le_i64, le_u64};
++use nom::Parser as _;
++
++impl TryFrom<u32> for RelocationType {
++    type Error = ParseError;
++    fn try_from(value: u32) -> Result<Self, Self::Error> {
++        match value {
++            274 => Ok(Self::Aarch64AdrPrelLo21),
++            _ => Err(ParseError::InvalidRelocationType(value)),
++        }
++    }
++}
++
++impl TryFrom<u64> for Info {
++    type Error = ParseError;
++    fn try_from(value: u64) -> Result<Self, Self::Error> {
++        // 下位32ビットが再配置タイプ
++        let r#type = RelocationType::try_from((value & 0xffffffff) as u32)?;
++        // 上位32ビットがシンボルインデックス
++        let symbol_index = (value >> 32) as u32;
++        Ok(Info {
++            r#type,
++            symbol_index,
++        })
++    }
++}
++
++pub fn parse(section_headers: &[Header]) -> ParseResult<'_, Vec<Rela>> {
++    // .rela.textセクションを探す
++    let Some(rela_section) = section_headers
++        .iter()
++        .find(|h| h.r#type == SectionType::Rela)
++    else {
++        return Ok((&[], vec![]));
++    };
++
++    let entry_count = (rela_section.size / rela_section.entsize) as usize;
++
++    let (rest, relocations) = count(
++        |input| {
++            let (rest, offset) = le_u64(input)?;
++            let (rest, info) = map_res(le_u64, Info::try_from).parse(rest)?;
++            let (rest, addend) = le_i64(rest)?;
++
++            let rela = Rela {
++                offset,
++                info,
++                addend,
++            };
++            Ok((rest, rela))
++        },
++        entry_count,
++    )
++    .parse(&rela_section.data)?;
++
++    Ok((rest, relocations))
++}
++
+ #[cfg(test)]
+ mod tests {
+```
+
+### テストを実行する
+
+```sh
+$ cargo test parser::relocation
+running 1 test
+test parser::relocation::tests::parse_relocations ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+## ELFパーサーの統合
+
+すべてのパース処理を統合し、ELF全体を表す構造体を定義する。
+
+### テストを書く
+
+```diff:src/parser.rs
+ pub type ParseResult<'a, T> = nom::IResult<&'a [u8], T, ParseError>;
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn parse_elf() {
++        let raw = include_bytes!("./parser/fixtures/main.o");
++        let elf = Elf::parse(raw).unwrap();
++
++        // ヘッダーの確認
++        assert_eq!(elf.header.r#type, crate::elf::header::Type::Rel);
++        assert_eq!(elf.header.machine, crate::elf::header::Machine::AArch64);
++
++        // シンボルの確認
++        assert!(elf.symbols.iter().any(|s| s.name == "_start"));
++        assert!(elf.symbols.iter().any(|s| s.name == "x"));
++
++        // 再配置の確認
++        assert_eq!(elf.relocations.len(), 1);
++    }
++}
+```
+
+### ELF構造体を実装する
+
+```diff:src/parser.rs
+ use error::ParseError;
+
+ pub type ParseResult<'a, T> = nom::IResult<&'a [u8], T, ParseError>;
++
++use crate::elf::header::Header;
++use crate::elf::relocation::Rela;
++use crate::elf::section;
++use crate::elf::symbol::Symbol;
++
++#[derive(Debug)]
++pub struct Elf {
++    pub header: Header,
++    pub section_headers: Vec<section::Header>,
++    pub symbols: Vec<Symbol>,
++    pub relocations: Vec<Rela>,
++}
++
++impl Elf {
++    pub fn parse(raw: &[u8]) -> Result<Self, ParseError> {
++        let (_, header) = header::parse(raw).map_err(|e| match e {
++            nom::Err::Error(e) | nom::Err::Failure(e) => e,
++            _ => ParseError::InvalidHeaderSize(0),
++        })?;
++
++        let (_, section_headers) = section::parse_headers(
++            raw,
++            header.shoff as usize,
++            header.shstrndx as usize,
++            header.shnum as usize,
++        )
++        .map_err(|e| match e {
++            nom::Err::Error(e) | nom::Err::Failure(e) => e,
++            _ => ParseError::InvalidHeaderSize(0),
++        })?;
++
++        let (_, symbols) = symbol::parse(raw, &section_headers).map_err(|e| match e {
++            nom::Err::Error(e) | nom::Err::Failure(e) => e,
++            _ => ParseError::InvalidHeaderSize(0),
++        })?;
++
++        let (_, relocations) = relocation::parse(&section_headers).map_err(|e| match e {
++            nom::Err::Error(e) | nom::Err::Failure(e) => e,
++            _ => ParseError::InvalidHeaderSize(0),
++        })?;
++
++        Ok(Self {
++            header,
++            section_headers,
++            symbols,
++            relocations,
++        })
++    }
++}
+
+ #[cfg(test)]
+ mod tests {
+```
+
+### テストを実行する
+
+```sh
+$ cargo test parser::tests::parse_elf
+running 1 test
+test parser::tests::parse_elf ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+## まとめ
+
+本章ではELFパーサーを完成させた。
+
+- モジュール宣言を先に追加してLSPを有効化
+- 再配置エントリの`info`は上位32ビットがシンボルインデックス、下位32ビットが再配置タイプ
+- `Elf`構造体でパース結果を統合
+
+これでオブジェクトファイルの読み込みができるようになった。次章では、リンク処理の仕組みを解説する。
