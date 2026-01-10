@@ -21,8 +21,6 @@ src/
 
 ## モジュール構造を更新する
 
-LSPが正しく動作するように、最初にモジュール宣言を追加する。
-
 ### elf.rsを更新する
 
 ```diff:src/elf.rs
@@ -274,10 +272,20 @@ mod tests {
 
 ```sh
 $ cargo test parser::section
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests src/lib.rs (target/debug/deps/tiny_linker-5558fbb2f7e5f511)
+
 running 1 test
 test parser::section::tests::parse_section_headers ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/tiny_linker-bfb6a3022e853684)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
 ```
 
 ## シンボルテーブルのパース
@@ -293,7 +301,6 @@ pub enum Binding {
     #[default]
     Local = 0,
     Global = 1,
-    Weak = 2,
 }
 
 #[derive(Default, Debug, PartialEq, Eq, Clone, Copy)]
@@ -333,8 +340,7 @@ pub struct Symbol {
     pub size: u64,
 }
 
-/// 未定義シンボルのセクションインデックス
-pub const SHN_UNDEF: u16 = 0;
+pub const SYMBOL_UNDEFINED: u16 = 0;
 ```
 
 ### パーサーエラーを追加する
@@ -390,14 +396,14 @@ mod tests {
 ### パース処理を実装する
 
 ```diff:src/parser/symbol.rs
-+use super::{helper, ParseResult};
++use super::{ParseResult, helper};
 +use crate::elf::section::{Header, SectionType};
 +use crate::elf::symbol::{Binding, Info, Symbol, SymbolType, Visibility};
 +use crate::parser::error::ParseError;
++use nom::Parser as _;
 +use nom::combinator::map_res;
 +use nom::multi::count;
-+use nom::number::complete::{le_u16, le_u32, le_u64, le_u8};
-+use nom::Parser as _;
++use nom::number::complete::{le_u8, le_u16, le_u32, le_u64};
 +
 +impl TryFrom<u8> for Info {
 +    type Error = ParseError;
@@ -405,7 +411,6 @@ mod tests {
 +        let binding = match value >> 4 {
 +            0 => Binding::Local,
 +            1 => Binding::Global,
-+            2 => Binding::Weak,
 +            _ => return Err(ParseError::InvalidSymbolBinding(value)),
 +        };
 +        let r#type = match value & 0xf {
@@ -433,7 +438,7 @@ mod tests {
 +    }
 +}
 +
-+pub fn parse<'a>(raw: &'a [u8], section_headers: &[Header]) -> ParseResult<'a, Vec<Symbol>> {
++pub fn parse<'a>(raw: &'a [u8], section_headers: &'a [Header]) -> ParseResult<'a, Vec<Symbol>> {
 +    // .symtabセクションを探す
 +    let Some(symtab) = section_headers
 +        .iter()
@@ -470,7 +475,7 @@ mod tests {
 +        },
 +        entry_count,
 +    )
-+    .parse(&symtab.data)?;
++    .parse(symtab.data.as_slice())?;
 +
 +    Ok((rest, symbols))
 +}
@@ -483,17 +488,25 @@ mod tests {
 
 ```sh
 $ cargo test parser::symbol
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests src/lib.rs (target/debug/deps/tiny_linker-5558fbb2f7e5f511)
+
 running 1 test
 test parser::symbol::tests::parse_symbols ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/tiny_linker-bfb6a3022e853684)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ```
 
 ## まとめ
 
 本章ではセクションヘッダーとシンボルテーブルのパースを実装した。
 
-- モジュール宣言を先に追加してLSPを有効化
 - セクションヘッダーの`link`フィールドで関連する文字列テーブルを参照
 - シンボルの`info`フィールドは上位4ビットがバインディング、下位4ビットがタイプ
 - 文字列テーブルからオフセットを使って名前を解決

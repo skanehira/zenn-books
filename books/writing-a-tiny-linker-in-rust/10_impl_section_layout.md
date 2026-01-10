@@ -8,8 +8,8 @@ title: "セクション配置の実装"
 
 ```
 src/
+├── linker.rs          # 本章（モジュール追加）
 ├── linker/
-│   ├── mod.rs         # 本章（モジュール追加）
 │   ├── output.rs      # 本章（Section追加）
 │   └── section.rs     # 本章
 └── ...
@@ -17,11 +17,9 @@ src/
 
 ## モジュール構造を更新する
 
-LSPが正しく動作するように、最初にモジュール宣言を追加する。
+### linker.rsを更新する
 
-### linker/mod.rsを更新する
-
-```diff:src/linker/mod.rs
+```diff:src/linker.rs
  pub mod output;
 +pub mod section;
  pub mod symbol;
@@ -39,43 +37,13 @@ $ touch src/linker/section.rs
 
 ### テストを書く
 
-`src/linker/output.rs`に出力セクションのテストを追加する。
-
-```diff:src/linker/output.rs
- #[cfg(test)]
- mod tests {
-     use super::*;
-     use crate::elf::symbol::{Binding, SymbolType};
-+    use crate::elf::section::{SectionFlag, SectionType};
-+    use std::borrow::Cow;
-
-+    #[test]
-+    fn section_creation() {
-+        let section = Section {
-+            name: Cow::Borrowed(".text"),
-+            r#type: SectionType::ProgBits,
-+            flags: vec![SectionFlag::Alloc, SectionFlag::ExecInstr],
-+            addr: 0x400100,
-+            offset: 0x100,
-+            size: 16,
-+            data: Cow::Owned(vec![0u8; 16]),
-+            align: 4,
-+        };
-+
-+        assert_eq!(section.name, ".text");
-+        assert_eq!(section.addr, 0x400100);
-+    }
-+
-     fn make_symbol(binding: Binding, is_defined: bool) -> ResolvedSymbol {
-```
-
-### Section構造体を実装する
+`src/linker/output.rs`にSection構造体とテストを追加する。
 
 ```diff:src/linker/output.rs
 +use std::borrow::Cow;
 +
 +use crate::elf::section::{SectionFlag, SectionType};
- use crate::elf::symbol;
+ use crate::elf::symbol::{self, Binding};
 
 +#[derive(Debug, Clone)]
 +pub struct Section<'a> {
@@ -93,6 +61,33 @@ $ touch src/linker/section.rs
  pub struct ResolvedSymbol {
 ```
 
+```diff:src/linker/output.rs
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+-    use crate::elf::symbol::SymbolType;
++    use crate::elf::symbol::{Binding, SymbolType};
++
++    #[test]
++    fn section_creation() {
++        let section = Section {
++            name: Cow::Borrowed(".text"),
++            r#type: SectionType::ProgBits,
++            flags: vec![SectionFlag::Alloc, SectionFlag::ExecInstr],
++            addr: 0x400100,
++            offset: 0x100,
++            size: 16,
++            data: Cow::Owned(vec![0u8; 16]),
++            align: 4,
++        };
++
++        assert_eq!(section.name, ".text");
++        assert_eq!(section.addr, 0x400100);
++    }
+
+     fn make_symbol(binding: Binding, is_defined: bool) -> ResolvedSymbol {
+```
+
 ### テストを実行する
 
 ```sh
@@ -107,15 +102,20 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
 ### テストを書く
 
-`src/linker/section.rs`にテストを書く。
+`src/linker/section.rs`にテストを書く。テストをコンパイルするために、最小限のスタブも一緒に追加する。
 
 ```rust:src/linker/section.rs
+/// 値を指定した2のべき乗の境界に揃える
+pub fn align(_value: u64, _alignment: u64) -> u64 {
+    todo!()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn align_value() {
+    fn align_returns_aligned_value_when_value_not_aligned() {
         // 8の倍数に切り上げ
         assert_eq!(align(0, 8), 0);
         assert_eq!(align(1, 8), 8);
@@ -134,21 +134,20 @@ mod tests {
 ### align関数を実装する
 
 ```diff:src/linker/section.rs
-+/// 値を指定した2のべき乗の境界に揃える
+ /// 値を指定した2のべき乗の境界に揃える
+-pub fn align(_value: u64, _alignment: u64) -> u64 {
+-    todo!()
 +pub fn align(value: u64, alignment: u64) -> u64 {
 +    (value + alignment - 1) & !(alignment - 1)
-+}
-+
- #[cfg(test)]
- mod tests {
+ }
 ```
 
 ### テストを実行する
 
 ```sh
-$ cargo test linker::section::tests::align_value
+$ cargo test linker::section::tests::align_returns_aligned_value
 running 1 test
-test linker::section::tests::align_value ... ok
+test linker::section::tests::align_returns_aligned_value_when_value_not_aligned ... ok
 
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
@@ -156,6 +155,36 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ## セクション配置の実装
 
 ### テストを書く
+
+`src/linker/section.rs`にテストを書く。テストをコンパイルするために、最小限のスタブも一緒に追加する。
+
+```diff:src/linker/section.rs
++use std::borrow::Cow;
++use std::collections::HashMap;
++
++use crate::elf::section::{SectionFlag, SectionType};
++use crate::error::Result;
++
++use super::output::{ResolvedSymbol, Section};
++use super::Linker;
++
++/// 実行可能ファイルのベースアドレス
++pub static BASE_ADDR: u64 = 0x400000;
++
+ /// 値を指定した2のべき乗の境界に揃える
+ pub fn align(value: u64, alignment: u64) -> u64 {
+     (value + alignment - 1) & !(alignment - 1)
+ }
++
++impl Linker {
++    pub fn layout_sections(
++        &self,
++        _resolved_symbols: &mut HashMap<String, ResolvedSymbol>,
++    ) -> Result<(Vec<Section<'static>>, HashMap<String, usize>)> {
++        todo!()
++    }
++}
+```
 
 ```diff:src/linker/section.rs
  #[cfg(test)]
@@ -165,7 +194,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 +    use crate::parser::Elf;
 
      #[test]
-     fn align_value() {
+     fn align_returns_aligned_value_when_value_not_aligned() {
          // 8の倍数に切り上げ
          assert_eq!(align(0, 8), 0);
          assert_eq!(align(1, 8), 8);
@@ -180,7 +209,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
      }
 +
 +    #[test]
-+    fn layout_sections() {
++    fn layout_sections_returns_sections_with_correct_addresses() {
 +        let main_o = include_bytes!("../parser/fixtures/main.o");
 +        let sub_o = include_bytes!("../parser/fixtures/sub.o");
 +
@@ -213,28 +242,13 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ### セクション配置を実装する
 
 ```diff:src/linker/section.rs
-+use std::borrow::Cow;
-+use std::collections::HashMap;
-+
-+use crate::elf::section::{SectionFlag, SectionType};
-+use crate::error::Result;
-+
-+use super::output::{ResolvedSymbol, Section};
-+use super::Linker;
-+
-+/// 実行可能ファイルのベースアドレス
-+pub static BASE_ADDR: u64 = 0x400000;
-+
- /// 値を指定した2のべき乗の境界に揃える
- pub fn align(value: u64, alignment: u64) -> u64 {
-     (value + alignment - 1) & !(alignment - 1)
- }
-+
-+impl Linker {
-+    pub fn layout_sections(
-+        &self,
+ impl Linker {
+     pub fn layout_sections(
+         &self,
+-        _resolved_symbols: &mut HashMap<String, ResolvedSymbol>,
 +        resolved_symbols: &mut HashMap<String, ResolvedSymbol>,
-+    ) -> Result<(Vec<Section<'static>>, HashMap<String, usize>)> {
+     ) -> Result<(Vec<Section<'static>>, HashMap<String, usize>)> {
+-        todo!()
 +        // セクションのマージ
 +        let output_sections = self.merge_sections(resolved_symbols, BASE_ADDR)?;
 +
@@ -353,9 +367,9 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 +
 +        // シンボルのアドレスを更新
 +        for symbol in resolved_symbols.values_mut() {
-+            if let Some(&offset) = text_offsets.get(&(symbol.object_index, symbol.shndx)) {
++            if let Some(&offset) = text_offsets.get(&(symbol.object_index, symbol.section_index)) {
 +                symbol.value = text_section.addr + (offset as u64) + symbol.value;
-+            } else if let Some(&offset) = data_offsets.get(&(symbol.object_index, symbol.shndx)) {
++            } else if let Some(&offset) = data_offsets.get(&(symbol.object_index, symbol.section_index)) {
 +                symbol.value = data_section.addr + (offset as u64) + symbol.value;
 +            }
 +        }
@@ -443,7 +457,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 +            data: Cow::Owned(symtab),
 +            align: 8,
 +        };
-+
+
 +        (symtab_section, strtab_section)
 +    }
 +
@@ -463,7 +477,6 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 +        let binding = match symbol.info.binding {
 +            Binding::Local => 0,
 +            Binding::Global => 1,
-+            Binding::Weak => 2,
 +        };
 +        let st_type = symbol.info.r#type as u8;
 +        let st_info = (binding << 4) | st_type;
@@ -473,7 +486,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 +        symtab.push(0);
 +
 +        // st_shndx (2バイト) - セクションインデックス（1=.text, 2=.data）
-+        let shndx = if symbol.shndx == 0 {
++        let shndx = if symbol.section_index == 0 {
 +            0u16
 +        } else {
 +            // 簡略化: .textを1, .dataを2とする
@@ -499,11 +512,8 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 +        _resolved_symbols: &HashMap<String, ResolvedSymbol>,
 +    ) -> Result<()> {
 +        Ok(())
-+    }
-+}
-
- #[cfg(test)]
- mod tests {
+     }
+ }
 ```
 
 ### テストを実行する
@@ -511,7 +521,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```sh
 $ cargo test linker::section::tests::layout_sections
 running 1 test
-test linker::section::tests::layout_sections ... ok
+test linker::section::tests::layout_sections_returns_sections_with_correct_addresses ... ok
 
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
@@ -541,7 +551,7 @@ _start のアドレス = .textセクションのアドレス + main.oの.textオ
 
 本章ではセクション配置を実装した。
 
-- モジュール宣言を先に追加してLSPを有効化
+- `todo!()`でスタブを作成してからテストを書く
 - `align`関数で値を2のべき乗の境界に揃える
 - 複数オブジェクトの`.text`と`.data`をマージ
 - マージ後のオフセットを記録し、シンボルアドレスを更新

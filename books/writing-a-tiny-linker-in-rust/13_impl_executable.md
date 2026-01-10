@@ -9,50 +9,16 @@ title: "実行バイナリの生成"
 ```
 src/
 ├── main.rs            # 本章
-└── linker/
-    └── mod.rs         # 本章（link_to_file追加）
+└── linker.rs          # 本章（link_to_file追加）
 ```
 
 ## link_to_file関数の実装
 
 ### テストを書く
 
-`src/linker/mod.rs`にテストを追加する。
+`src/linker.rs`にテストを書く。テストをコンパイルするために、最小限のスタブも一緒に追加する。
 
-```diff:src/linker/mod.rs
- #[cfg(test)]
- mod tests {
-     use super::*;
-+    use crate::parser::Elf;
-
-     #[test]
-     fn add_object() {
-         // ... 既存のテスト
-     }
-+
-+    #[test]
-+    fn link_to_file() {
-+        let main_o = include_bytes!("../parser/fixtures/main.o").to_vec();
-+        let sub_o = include_bytes!("../parser/fixtures/sub.o").to_vec();
-+
-+        let mut linker = Linker::new();
-+        let output = linker.link_to_file(vec![main_o, sub_o]).unwrap();
-+
-+        // ELFマジックナンバー
-+        assert_eq!(&output[0..4], &[0x7f, b'E', b'L', b'F']);
-+
-+        // ファイルタイプ（EXEC = 2）
-+        assert_eq!(output[16], 2);
-+
-+        // マシン（AArch64 = 0xb7）
-+        assert_eq!(output[18], 0xb7);
-+    }
- }
-```
-
-### link_to_file関数を実装する
-
-```diff:src/linker/mod.rs
+```diff:src/linker.rs
 +use std::io::Cursor;
 +
 +use crate::error::{LinkerError, Result};
@@ -74,7 +40,54 @@ src/
          self.objects.push(obj);
      }
 +
-+    pub fn link_to_file(&mut self, inputs: Vec<Vec<u8>>) -> Result<Vec<u8>> {
++    pub fn link_to_file(&mut self, _inputs: Vec<Vec<u8>>) -> Result<Vec<u8>> {
++        todo!()
++    }
+ }
+```
+
+```diff:src/linker.rs
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+
+     #[test]
+     fn add_object_appends_to_lists() {
+         let raw = include_bytes!("parser/fixtures/sub.o");
+         let elf = crate::parser::Elf::parse(raw).unwrap();
+
+         let mut linker = Linker::new();
+         linker.add_object("sub.o".to_string(), elf);
+
+         assert_eq!(linker.objects.len(), 1);
+         assert_eq!(linker.object_names[0], "sub.o");
+     }
++
++    #[test]
++    fn link_to_file_returns_valid_elf() {
++        let main_o = include_bytes!("parser/fixtures/main.o").to_vec();
++        let sub_o = include_bytes!("parser/fixtures/sub.o").to_vec();
++
++        let mut linker = Linker::new();
++        let output = linker.link_to_file(vec![main_o, sub_o]).unwrap();
++
++        // ELFマジックナンバー
++        assert_eq!(&output[0..4], &[0x7f, b'E', b'L', b'F']);
++
++        // ファイルタイプ（EXEC = 2）
++        assert_eq!(output[16], 2);
++
++        // マシン（AArch64 = 0xb7）
++        assert_eq!(output[18], 0xb7);
++    }
+ }
+```
+
+### link_to_file関数を実装する
+
+```diff:src/linker.rs
+     pub fn link_to_file(&mut self, inputs: Vec<Vec<u8>>) -> Result<Vec<u8>> {
+-        todo!()
 +        // 1. 入力ファイルをパース
 +        for (idx, input) in inputs.iter().enumerate() {
 +            let obj = Elf::parse(input).map_err(|e| LinkerError::Parse(format!("{:?}", e)))?;
@@ -98,8 +111,7 @@ src/
 +        )?;
 +
 +        Ok(out.into_inner())
-+    }
- }
+     }
 ```
 
 ### テストを実行する
@@ -107,7 +119,7 @@ src/
 ```sh
 $ cargo test linker::tests::link_to_file
 running 1 test
-test linker::tests::link_to_file ... ok
+test linker::tests::link_to_file_returns_valid_elf ... ok
 
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```

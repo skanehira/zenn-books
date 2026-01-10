@@ -9,16 +9,14 @@ title: "シンボル解決の実装"
 ```
 src/
 ├── error.rs           # 本章
+├── linker.rs          # 本章
 ├── linker/
-│   ├── mod.rs         # 本章
 │   ├── output.rs      # 本章
 │   └── symbol.rs      # 本章
 └── lib.rs             # 本章（モジュール追加）
 ```
 
 ## モジュール構造を作成する
-
-LSPが正しく動作するように、最初にモジュール宣言と空のファイルを作成する。
 
 ### lib.rsを更新する
 
@@ -29,159 +27,156 @@ LSPが正しく動作するように、最初にモジュール宣言と空の�
  pub mod parser;
 ```
 
-### linker/mod.rsを作成する
+### 空のモジュールファイルを作成する
 
-```rust:src/linker/mod.rs
+```sh
+$ touch src/error.rs src/linker.rs
+$ mkdir -p src/linker
+$ touch src/linker/output.rs src/linker/symbol.rs
+```
+
+### linker.rsを作成する
+
+```rust:src/linker.rs
 pub mod output;
 pub mod symbol;
 ```
 
-### 空のモジュールファイルを作成する
-
-```sh
-$ touch src/error.rs
-$ mkdir -p src/linker
-$ touch src/linker/mod.rs src/linker/output.rs src/linker/symbol.rs
-```
-
 ## エラー型の定義
 
-### テストを書く
-
-`src/error.rs`にテストを書く。
+`src/error.rs`にエラー型を追加する。
 
 ```rust:src/error.rs
-#[cfg(test)]
-mod tests {
-    use super::*;
+use thiserror::Error;
 
-    #[test]
-    fn error_display() {
-        let err = LinkerError::UnresolvedSymbols {
-            symbols: vec!["foo".to_string()],
-        };
-        assert_eq!(format!("{}", err), "Unresolved symbols: [\"foo\"]");
-    }
+#[derive(Debug, Error)]
+pub enum LinkerError {
+    #[error("Duplicate symbols: {symbols:?}")]
+    DuplicateSymbol { symbols: Vec<String> },
+
+    #[error("Unresolved symbols: {symbols:?}")]
+    UnresolvedSymbols { symbols: Vec<String> },
+
+    #[error("Missing entry point: _start")]
+    MissingEntryPoint,
+
+    #[error("Parse error: {0}")]
+    Parse(String),
+
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
 }
-```
 
-### エラー型を実装する
-
-```diff:src/error.rs
-+use thiserror::Error;
-+
-+#[derive(Debug, Error)]
-+pub enum LinkerError {
-+    #[error("Duplicate symbols: {symbols:?}")]
-+    DuplicateSymbol { symbols: Vec<String> },
-+
-+    #[error("Unresolved symbols: {symbols:?}")]
-+    UnresolvedSymbols { symbols: Vec<String> },
-+
-+    #[error("Missing entry point: _start")]
-+    MissingEntryPoint,
-+
-+    #[error("Parse error: {0}")]
-+    Parse(String),
-+
-+    #[error("IO error: {0}")]
-+    Io(#[from] std::io::Error),
-+}
-+
-+pub type Result<T> = std::result::Result<T, LinkerError>;
-+
- #[cfg(test)]
- mod tests {
-```
-
-### テストを実行する
-
-```sh
-$ cargo test error::tests::error_display
-running 1 test
-test error::tests::error_display ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+pub type Result<T> = std::result::Result<T, LinkerError>;
 ```
 
 ## Linker構造体の定義
 
 ### テストを書く
 
-`src/linker/mod.rs`にテストを追加する。
+`src/linker.rs`にテストを書く。テストをコンパイルするために、最小限のスタブも一緒に追加する。
 
-```diff:src/linker/mod.rs
- pub mod output;
- pub mod symbol;
-+
-+#[cfg(test)]
-+mod tests {
-+    use super::*;
-+
-+    #[test]
-+    fn add_object() {
-+        let raw = include_bytes!("../parser/fixtures/sub.o");
-+        let elf = crate::parser::Elf::parse(raw).unwrap();
-+
-+        let mut linker = Linker::new();
-+        linker.add_object("sub.o".to_string(), elf);
-+
-+        assert_eq!(linker.objects.len(), 1);
-+        assert_eq!(linker.object_names[0], "sub.o");
-+    }
-+}
+```rust:src/linker.rs
+pub mod output;
+pub mod symbol;
+
+use crate::parser::Elf;
+
+#[derive(Debug, Default)]
+pub struct Linker {
+    pub objects: Vec<Elf>,
+    pub object_names: Vec<String>,
+}
+
+impl Linker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn add_object(&mut self, name: String, obj: Elf) {
+        todo!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_object_appends_to_lists() {
+        let raw = include_bytes!("parser/fixtures/sub.o");
+        let elf = crate::parser::Elf::parse(raw).unwrap();
+
+        let mut linker = Linker::new();
+        linker.add_object("sub.o".to_string(), elf);
+
+        assert_eq!(linker.objects.len(), 1);
+        assert_eq!(linker.object_names[0], "sub.o");
+    }
+}
 ```
 
-### Linker構造体を実装する
+### add_objectを実装する
 
-```diff:src/linker/mod.rs
- pub mod output;
- pub mod symbol;
+`todo!()`を実装に置き換える。
 
-+use crate::parser::Elf;
-+
-+#[derive(Debug, Default)]
-+pub struct Linker {
-+    pub objects: Vec<Elf>,
-+    pub object_names: Vec<String>,
-+}
-+
-+impl Linker {
-+    pub fn new() -> Self {
-+        Self::default()
-+    }
-+
-+    pub fn add_object(&mut self, name: String, obj: Elf) {
+```diff:src/linker.rs
+     pub fn add_object(&mut self, name: String, obj: Elf) {
+-        todo!()
 +        self.object_names.push(name);
 +        self.objects.push(obj);
-+    }
-+}
-+
- #[cfg(test)]
- mod tests {
+     }
 ```
 
 ### テストを実行する
 
 ```sh
 $ cargo test linker::tests::add_object
-running 1 test
-test linker::tests::add_object ... ok
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running unittests src/lib.rs (target/debug/deps/tiny_linker-5558fbb2f7e5f511)
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+running 1 test
+test linker::tests::add_object_appends_to_lists ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/tiny_linker-bfb6a3022e853684)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ```
 
 ## 解決済みシンボルの構造体
 
 ### テストを書く
 
-`src/linker/output.rs`にテストを書く。
+`src/linker/output.rs`にResolvedSymbol構造体のスタブとテストを追加する。テストをコンパイルするために、最小限のスタブも一緒に追加する。
 
 ```rust:src/linker/output.rs
+use crate::elf::symbol::{self, Binding};
+
+#[derive(Debug, Clone)]
+pub struct ResolvedSymbol {
+    pub name: String,
+    pub value: u64,
+    pub size: u64,
+    pub info: symbol::Info,
+    pub section_index: u16,
+    pub object_index: usize,
+    pub is_defined: bool,
+}
+
+impl ResolvedSymbol {
+    pub fn is_stronger_than(&self, other: &Self) -> bool {
+        todo!()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::elf::symbol::{Binding, SymbolType};
+    use crate::elf::symbol::SymbolType;
 
     fn make_symbol(binding: Binding, is_defined: bool) -> ResolvedSymbol {
         ResolvedSymbol {
@@ -192,28 +187,21 @@ mod tests {
                 binding,
                 r#type: SymbolType::NoType,
             },
-            shndx: if is_defined { 1 } else { 0 },
+            section_index: if is_defined { 1 } else { 0 },
             object_index: 0,
             is_defined,
         }
     }
 
     #[test]
-    fn global_is_stronger_than_weak() {
-        let global = make_symbol(Binding::Global, true);
-        let weak = make_symbol(Binding::Weak, true);
-        assert!(global.is_stronger_than(&weak));
-    }
-
-    #[test]
-    fn local_is_stronger_than_global() {
+    fn is_stronger_than_returns_true_when_local_vs_global() {
         let local = make_symbol(Binding::Local, true);
         let global = make_symbol(Binding::Global, true);
         assert!(local.is_stronger_than(&global));
     }
 
     #[test]
-    fn global_is_not_stronger_than_global() {
+    fn is_stronger_than_returns_false_when_global_vs_global() {
         let global1 = make_symbol(Binding::Global, true);
         let global2 = make_symbol(Binding::Global, true);
         assert!(!global1.is_stronger_than(&global2));
@@ -221,77 +209,74 @@ mod tests {
 }
 ```
 
-バインディングの強さは `Local > Global > Weak` の順である。
+バインディングの強さは `Local > Global` の順である。
 
 - **Local**: ファイル内のみで有効。他のファイルから参照されない
 - **Global**: 他のファイルから参照可能
-- **Weak**: 同名のGlobalシンボルがあれば置き換えられる
 
-### ResolvedSymbol構造体を実装する
+### is_stronger_thanを実装する
 
 ```diff:src/linker/output.rs
-+use crate::elf::symbol;
-+
-+#[derive(Debug, Clone)]
-+pub struct ResolvedSymbol {
-+    pub name: String,
-+    pub value: u64,
-+    pub size: u64,
-+    pub info: symbol::Info,
-+    pub shndx: u16,
-+    pub object_index: usize,
-+    pub is_defined: bool,
-+}
-+
-+impl ResolvedSymbol {
-+    /// シンボルの「強さ」を比較する
-+    /// Local > Global > Weak の順で強い
-+    pub fn is_stronger_than(&self, other: &Self) -> bool {
+     pub fn is_stronger_than(&self, other: &Self) -> bool {
+-        todo!()
 +        match (self.info.binding, other.info.binding) {
 +            // LOCALは最も強い
-+            (symbol::Binding::Local, _) => true,
-+            // WEAKより他のすべてのバインディングは強い
-+            (_, symbol::Binding::Weak) => true,
++            (Binding::Local, _) => true,
 +            // 同じGLOBAL同士なら後勝ちしない
-+            (symbol::Binding::Global, symbol::Binding::Global) => false,
++            (Binding::Global, Binding::Global) => false,
 +            // LOCALのほうがGLOBALより強い
-+            (symbol::Binding::Global, symbol::Binding::Local) => false,
-+            // WEAKは最も弱い
-+            (symbol::Binding::Weak, _) => false,
++            (Binding::Global, Binding::Local) => false,
 +        }
-+    }
-+}
-+
- #[cfg(test)]
- mod tests {
+     }
 ```
 
 ### テストを実行する
 
 ```sh
 $ cargo test linker::output
-running 3 tests
-test linker::output::tests::global_is_not_stronger_than_global ... ok
-test linker::output::tests::global_is_stronger_than_weak ... ok
-test linker::output::tests::local_is_stronger_than_global ... ok
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running unittests src/lib.rs (target/debug/deps/tiny_linker-5558fbb2f7e5f511)
 
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+running 2 tests
+test linker::output::tests::is_stronger_than_returns_false_when_global_vs_global ... ok
+test linker::output::tests::is_stronger_than_returns_true_when_local_vs_global ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/tiny_linker-bfb6a3022e853684)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ```
 
 ## シンボル解決の実装
 
 ### テストを書く
 
-`src/linker/symbol.rs`にテストを書く。
+`src/linker/symbol.rs`にテストを書く。テストをコンパイルするために、最小限のスタブも一緒に追加する。
 
 ```rust:src/linker/symbol.rs
+use std::collections::HashMap;
+
+use crate::error::{LinkerError, Result};
+
+use super::Linker;
+use super::output::ResolvedSymbol;
+
+impl Linker {
+    pub fn resolve_symbols(&self) -> Result<HashMap<String, ResolvedSymbol>> {
+        todo!()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::parser::Elf;
 
     #[test]
-    fn resolve_symbols() {
+    fn resolve_symbols_returns_resolved_symbols() {
         let main_o = include_bytes!("../parser/fixtures/main.o");
         let sub_o = include_bytes!("../parser/fixtures/sub.o");
 
@@ -313,7 +298,7 @@ mod tests {
     }
 
     #[test]
-    fn unresolved_symbol_error() {
+    fn resolve_symbols_returns_error_when_symbol_unresolved() {
         let main_o = include_bytes!("../parser/fixtures/main.o");
 
         let mut linker = Linker::new();
@@ -352,19 +337,20 @@ mod tests {
 - `_start`: `main.o`で定義
 - `x`: `sub.o`で定義
 
-### パース処理を実装する
+### resolve_symbolsを実装する
 
 ```diff:src/linker/symbol.rs
-+use std::collections::HashMap;
-+
-+use crate::elf::symbol::SHN_UNDEF;
-+use crate::error::{LinkerError, Result};
-+
-+use super::output::ResolvedSymbol;
-+use super::Linker;
-+
-+impl Linker {
-+    pub fn resolve_symbols(&self) -> Result<HashMap<String, ResolvedSymbol>> {
+ use std::collections::HashMap;
+
++use crate::elf::symbol::SYMBOL_UNDEFINED;
+ use crate::error::{LinkerError, Result};
+
+ use super::output::ResolvedSymbol;
+ use super::Linker;
+
+ impl Linker {
+     pub fn resolve_symbols(&self) -> Result<HashMap<String, ResolvedSymbol>> {
+-        todo!()
 +        let mut resolved_symbols: HashMap<String, ResolvedSymbol> = HashMap::new();
 +        let mut duplicate_symbols = vec![];
 +
@@ -376,10 +362,10 @@ mod tests {
 +                    value: symbol.value,
 +                    size: symbol.size,
 +                    info: symbol.info,
-+                    shndx: symbol.shndx,
++                    section_index: symbol.shndx,
 +                    object_index: obj_idx,
-+                    // shndxがSHN_UNDEF(0)でなければ定義済み
-+                    is_defined: symbol.shndx != SHN_UNDEF,
++                    // section_indexがSYMBOL_UNDEFINED(0)でなければ定義済み
++                    is_defined: symbol.shndx != SYMBOL_UNDEFINED,
 +                };
 +
 +                // 同名シンボルが既にあるか確認
@@ -432,30 +418,35 @@ mod tests {
 +        }
 +
 +        Ok(resolved_symbols)
-+    }
-+}
-+
- #[cfg(test)]
- mod tests {
+     }
+ }
 ```
 
 ### テストを実行する
 
 ```sh
 $ cargo test linker::symbol
-running 2 tests
-test linker::symbol::tests::resolve_symbols ... ok
-test linker::symbol::tests::unresolved_symbol_error ... ok
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+     Running unittests src/lib.rs (target/debug/deps/tiny_linker-5558fbb2f7e5f511)
 
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+running 2 tests
+test linker::symbol::tests::resolve_symbols_returns_error_when_symbol_unresolved ... ok
+test linker::symbol::tests::resolve_symbols_returns_resolved_symbols ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/tiny_linker-bfb6a3022e853684)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ```
 
 ## まとめ
 
 本章ではシンボル解決を実装した。
 
-- モジュール宣言を先に追加してLSPを有効化
-- シンボルの強さは `Local > Global > Weak` の順
+- シンボルの強さは `Local > Global` の順
 - 未定義シンボルは定義済みシンボルで上書きされる
 - 同じ強さの定義済みシンボルが重複するとエラー
 - 解決されないシンボルが残るとエラー

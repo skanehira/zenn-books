@@ -19,8 +19,6 @@ src/
 
 ## モジュール構造を更新する
 
-LSPが正しく動作するように、最初にモジュール宣言を追加する。
-
 ### elf.rsを更新する
 
 ```diff:src/elf.rs
@@ -196,7 +194,7 @@ mod tests {
 +        },
 +        entry_count,
 +    )
-+    .parse(&rela_section.data)?;
++   .parse(rela_section.data.as_slice())?;
 +
 +    Ok((rest, relocations))
 +}
@@ -209,10 +207,19 @@ mod tests {
 
 ```sh
 $ cargo test parser::relocation
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running unittests src/lib.rs (target/debug/deps/tiny_linker-5558fbb2f7e5f511)
+
 running 1 test
 test parser::relocation::tests::parse_relocations ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/tiny_linker-bfb6a3022e853684)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ```
 
 ## ELFパーサーの統合
@@ -256,13 +263,13 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 +
 +use crate::elf::header::Header;
 +use crate::elf::relocation::Rela;
-+use crate::elf::section;
++use crate::elf::section::Header as SectionHeader;
 +use crate::elf::symbol::Symbol;
 +
 +#[derive(Debug)]
 +pub struct Elf {
 +    pub header: Header,
-+    pub section_headers: Vec<section::Header>,
++    pub section_headers: Vec<SectionHeader>,
 +    pub symbols: Vec<Symbol>,
 +    pub relocations: Vec<Rela>,
 +}
@@ -312,17 +319,25 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
 ```sh
 $ cargo test parser::tests::parse_elf
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests src/lib.rs (target/debug/deps/tiny_linker-5558fbb2f7e5f511)
+
 running 1 test
 test parser::tests::parse_elf ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/tiny_linker-bfb6a3022e853684)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ```
 
 ## まとめ
 
 本章ではELFパーサーを完成させた。
 
-- モジュール宣言を先に追加してLSPを有効化
 - 再配置エントリの`info`は上位32ビットがシンボルインデックス、下位32ビットが再配置タイプ
 - `Elf`構造体でパース結果を統合
 

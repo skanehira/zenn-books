@@ -8,19 +8,20 @@ title: "ELF出力の実装"
 
 ```
 src/
+├── elf.rs             # 本章（モジュール追加）
 ├── elf/
 │   ├── header.rs         # 本章（to_vec追加）
 │   ├── program_header.rs # 本章
 │   └── segment.rs        # 本章
+├── linker.rs          # 本章（モジュール追加）
 ├── linker/
-│   ├── mod.rs            # 本章（モジュール追加）
 │   └── writer.rs         # 本章
 └── ...
 ```
 
 ## モジュール構造を更新する
 
-LSPが正しく動作するように、最初にモジュール宣言を追加する。
+LSPが正しく動作するように、最初にモジュール宣言と空のファイルを作成する。
 
 ### elf.rsを更新する
 
@@ -33,9 +34,9 @@ LSPが正しく動作するように、最初にモジュール宣言を追加�
  pub mod symbol;
 ```
 
-### linker/mod.rsを更新する
+### linker.rsを更新する
 
-```diff:src/linker/mod.rs
+```diff:src/linker.rs
  pub mod output;
  pub mod relocation;
  pub mod section;
@@ -52,19 +53,33 @@ $ touch src/elf/program_header.rs src/elf/segment.rs
 $ touch src/linker/writer.rs
 ```
 
-## プログラムヘッダーのデータ構造
+## セグメントフラグの定義
 
 ### テストを書く
 
-`src/elf/segment.rs`にテストを書く。
+`src/elf/segment.rs`にセグメント型とフラグ、テストを追加する。
 
 ```rust:src/elf/segment.rs
+#[derive(Debug, Clone, Copy)]
+#[repr(u32)]
+pub enum Type {
+    Load = 1,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(u32)]
+pub enum Flag {
+    Executable = 0x1,
+    Writable = 0x2,
+    Readable = 0x4,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn flag_values() {
+    fn flag_returns_correct_values() {
         assert_eq!(Flag::Executable as u32, 0x1);
         assert_eq!(Flag::Writable as u32, 0x2);
         assert_eq!(Flag::Readable as u32, 0x4);
@@ -72,46 +87,40 @@ mod tests {
 }
 ```
 
-### セグメント型を実装する
-
-```diff:src/elf/segment.rs
-+#[derive(Debug, Clone, Copy)]
-+#[repr(u32)]
-+pub enum Type {
-+    Load = 1,
-+}
-+
-+#[derive(Debug, Clone, Copy)]
-+#[repr(u32)]
-+pub enum Flag {
-+    Executable = 0x1,
-+    Writable = 0x2,
-+    Readable = 0x4,
-+}
-+
- #[cfg(test)]
- mod tests {
-```
-
 ### テストを実行する
 
 ```sh
-$ cargo test elf::segment::tests::flag_values
+$ cargo test elf::segment::tests::flag_returns_correct_values
 running 1 test
-test elf::segment::tests::flag_values ... ok
+test elf::segment::tests::flag_returns_correct_values ... ok
 
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 
+## プログラムヘッダーの構造体
+
 ### テストを書く
 
-`src/elf/program_header.rs`にテストを書く。
+`src/elf/program_header.rs`にProgramHeader構造体とテストを追加する。
 
 ```rust:src/elf/program_header.rs
+use super::segment::{Flag, Type};
+
+#[derive(Debug, Clone)]
+pub struct ProgramHeader {
+    pub r#type: Type,
+    pub flags: Vec<Flag>,
+    pub offset: u64,
+    pub vaddr: u64,
+    pub paddr: u64,
+    pub filesz: u64,
+    pub memsz: u64,
+    pub align: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::elf::segment::{Flag, Type};
 
     #[test]
     fn program_header_creation() {
@@ -132,27 +141,6 @@ mod tests {
 }
 ```
 
-### ProgramHeader構造体を実装する
-
-```diff:src/elf/program_header.rs
-+use super::segment::{Flag, Type};
-+
-+#[derive(Debug, Clone)]
-+pub struct ProgramHeader {
-+    pub r#type: Type,
-+    pub flags: Vec<Flag>,
-+    pub offset: u64,
-+    pub vaddr: u64,
-+    pub paddr: u64,
-+    pub filesz: u64,
-+    pub memsz: u64,
-+    pub align: u64,
-+}
-+
- #[cfg(test)]
- mod tests {
-```
-
 ### テストを実行する
 
 ```sh
@@ -167,7 +155,15 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
 ### テストを書く
 
-`src/elf/header.rs`にシリアライズのテストを追加する。
+`src/elf/header.rs`にテストを書く。テストをコンパイルするために、最小限のスタブも一緒に追加する。
+
+```diff:src/elf/header.rs
+ impl Header {
++    pub fn to_vec(&self) -> Vec<u8> {
++        todo!()
++    }
+ }
+```
 
 ```diff:src/elf/header.rs
  #[cfg(test)]
@@ -175,7 +171,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 +    use super::*;
 +
 +    #[test]
-+    fn header_to_vec() {
++    fn header_to_vec_returns_64_bytes() {
 +        let header = Header {
 +            ident: Ident {
 +                class: Class::Bit64,
@@ -212,7 +208,8 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
 ```diff:src/elf/header.rs
  impl Header {
-+    pub fn to_vec(&self) -> Vec<u8> {
+     pub fn to_vec(&self) -> Vec<u8> {
+-        todo!()
 +        let mut bytes = Vec::with_capacity(64);
 +
 +        // e_ident (16バイト)
@@ -252,10 +249,8 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 +        bytes.extend_from_slice(&self.shstrndx.to_le_bytes());
 +
 +        bytes
-+    }
+     }
  }
-
- #[cfg(test)]
 ```
 
 ### テストを実行する
@@ -263,7 +258,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```sh
 $ cargo test elf::header::tests::header_to_vec
 running 1 test
-test elf::header::tests::header_to_vec ... ok
+test elf::header::tests::header_to_vec_returns_64_bytes ... ok
 
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
@@ -272,9 +267,29 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
 ### テストを書く
 
-`src/linker/writer.rs`にテストを書く。
+`src/linker/writer.rs`にテストを書く。テストをコンパイルするために、最小限のスタブも一緒に追加する。
 
 ```rust:src/linker/writer.rs
+use std::collections::HashMap;
+use std::io::{Seek, Write};
+
+use crate::error::Result;
+
+use super::output::{ResolvedSymbol, Section};
+use super::Linker;
+
+impl Linker {
+    pub fn write_executable<W: Write + Seek>(
+        &self,
+        _writer: &mut W,
+        _resolved_symbols: HashMap<String, ResolvedSymbol>,
+        _section_tables: Vec<Section<'static>>,
+        _section_name_offsets: HashMap<String, usize>,
+    ) -> Result<()> {
+        todo!()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,7 +298,7 @@ mod tests {
     use std::io::Cursor;
 
     #[test]
-    fn write_executable() {
+    fn write_executable_writes_valid_elf_header() {
         let main_o = include_bytes!("../parser/fixtures/main.o");
         let sub_o = include_bytes!("../parser/fixtures/sub.o");
 
@@ -318,27 +333,34 @@ mod tests {
 ### ELF出力を実装する
 
 ```diff:src/linker/writer.rs
-+use std::collections::HashMap;
+ use std::collections::HashMap;
+-use std::io::{Seek, Write};
 +use std::io::{Seek, SeekFrom, Write};
-+
+
+-use crate::error::Result;
 +use crate::elf::header::{self, Class, Data, Ident, IdentVersion, Machine, OSABI, Type, Version};
 +use crate::elf::program_header::ProgramHeader;
 +use crate::elf::segment::{Flag, Type as SegmentType};
 +use crate::elf::symbol::Binding;
 +use crate::error::{LinkerError, Result};
-+
-+use super::output::{ResolvedSymbol, Section};
+
+ use super::output::{ResolvedSymbol, Section};
 +use super::section::{align, BASE_ADDR};
-+use super::Linker;
-+
-+impl Linker {
-+    pub fn write_executable<W: Write + Seek>(
-+        &self,
+ use super::Linker;
+
+ impl Linker {
+     pub fn write_executable<W: Write + Seek>(
+         &self,
+-        _writer: &mut W,
+-        _resolved_symbols: HashMap<String, ResolvedSymbol>,
+-        _section_tables: Vec<Section<'static>>,
+-        _section_name_offsets: HashMap<String, usize>,
 +        writer: &mut W,
 +        resolved_symbols: HashMap<String, ResolvedSymbol>,
 +        section_tables: Vec<Section<'static>>,
 +        section_name_offsets: HashMap<String, usize>,
-+    ) -> Result<()> {
+     ) -> Result<()> {
+-        todo!()
 +        // エントリポイント（_start）のアドレスを取得
 +        let entry = resolved_symbols
 +            .get("_start")
@@ -565,11 +587,8 @@ mod tests {
 +
 +        writer.write_all(&bytes)?;
 +        Ok(())
-+    }
-+}
-+
- #[cfg(test)]
- mod tests {
+     }
+ }
 ```
 
 ### テストを実行する
@@ -577,7 +596,7 @@ mod tests {
 ```sh
 $ cargo test linker::writer
 running 1 test
-test linker::writer::tests::write_executable ... ok
+test linker::writer::tests::write_executable_writes_valid_elf_header ... ok
 
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
@@ -613,7 +632,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
 本章ではELF出力を実装した。
 
-- モジュール宣言を先に追加してLSPを有効化
+- `todo!()`でスタブを作成してからテストを書く
 - ELFヘッダー: ファイルの種類、エントリポイント、セクションヘッダーの位置などを記録
 - プログラムヘッダー: OSがメモリにロードするセグメント情報
 - セクションヘッダー: 各セクションのメタデータ

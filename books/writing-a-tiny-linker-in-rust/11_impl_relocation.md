@@ -9,8 +9,8 @@ title: "再配置の適用"
 ```
 src/
 ├── error.rs               # 本章（エラー追加）
+├── linker.rs              # 本章（モジュール追加）
 ├── linker/
-│   ├── mod.rs             # 本章（モジュール追加）
 │   ├── relocation.rs      # 本章
 │   └── section.rs         # 本章（スタブを削除）
 └── ...
@@ -20,9 +20,9 @@ src/
 
 LSPが正しく動作するように、最初にモジュール宣言を追加する。
 
-### linker/mod.rsを更新する
+### linker.rsを更新する
 
-```diff:src/linker/mod.rs
+```diff:src/linker.rs
  pub mod output;
 +pub mod relocation;
  pub mod section;
