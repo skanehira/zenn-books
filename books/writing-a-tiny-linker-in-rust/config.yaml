@@ -8,12 +8,12 @@ chapters:
   - 01_intro
   - 02_intro_linker
   - 03_elf_binary_structure
-  - 05_impl_parser_header
-  - 06_impl_parser_section_symbol
-  - 07_impl_parser_relocation
-  - 08_how_linker_works
-  - 09_impl_symbol_resolution
-  - 10_impl_section_layout
-  - 11_impl_relocation
-  - 12_impl_elf_output
-  - 13_impl_executable
+  - 04_impl_parser_header
+  - 05_impl_parser_section_symbol
+  - 06_impl_parser_relocation
+  - 07_how_linker_works
+  - 08_impl_symbol_resolution
+  - 09_impl_section_layout
+  - 10_impl_relocation
+  - 11_impl_elf_output
+  - 12_impl_executable
