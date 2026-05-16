@@ -268,6 +268,28 @@ mod tests {
 
 ### ELF出力を実装する
 
+#### .symtabセクションヘッダの規約
+
+実装に入る前に、`.symtab` のセクションヘッダだけ少し特殊なので先に触れておく。
+`.symtab` セクションのヘッダだけは、他のセクションと違って `sh_link` / `sh_info` / `sh_entsize`
+の各フィールドに **意味のある値** を入れる必要がある。System V gABIで次のように規定されている。
+
+| フィールド | 意味 | 本書での値 |
+| --- | --- | --- |
+| `sh_link` | シンボル名を引く文字列テーブルセクションのインデックス | `.strtab` のセクションヘッダインデックス |
+| `sh_info` | 最後のLOCALシンボルのインデックス + 1（= GLOBALの開始位置） | LOCALシンボル数 + 1（先頭のNULL分） |
+| `sh_entsize` | 1エントリのサイズ | ELF64では24 |
+
+`sh_info` の「LOCALの個数 + 1」になるのは、シンボルテーブルの先頭に必ずNULLシンボルを
+1個置く規約があるため。つまりインデックス`[0]`がNULL、`[1..sh_info]`がLOCAL、
+`[sh_info..]`がGLOBALという並びになる。
+
+`readelf -s` で `.symtab` を表示するときも、リンカや動的ローダがシンボルを引くときも、
+この `sh_link` から `.strtab` を辿ってシンボル名を取得する。これらを正しくセットしないと
+`readelf -s` で `<corrupt: ...>` のような表示になるので、出力後の検証で気づきやすい。
+
+実装は次のとおり。
+
 ```diff:src/linker/writer.rs
  use std::collections::HashMap;
 -use std::io::{Seek, Write};
