@@ -57,8 +57,8 @@ src/
 │   ├── symbol.rs
 │   ├── relocation.rs
 │   └── helper.rs
+├── linker.rs
 └── linker/
-    ├── mod.rs
     ├── symbol.rs
     ├── section.rs
     ├── relocation.rs
@@ -304,7 +304,7 @@ useやモジュール冒頭の定数を追加する。
 +use nom::Parser as _;
 +
 +const ELF_MAGIC_NUMBER: [u8; 4] = [0x7f, 0x45, 0x4c, 0x46];
-+const ELF_IDENT_HEADER_SIZE: usize = 16;
++const ELF_IDENT_SIZE: usize = 16;
 +
  #[cfg(test)]
  mod tests {
@@ -315,7 +315,7 @@ useやモジュール冒頭の定数を追加する。
 
 ```diff:src/parser/header.rs
  const ELF_MAGIC_NUMBER: [u8; 4] = [0x7f, 0x45, 0x4c, 0x46];
- const ELF_IDENT_HEADER_SIZE: usize = 16;
+ const ELF_IDENT_SIZE: usize = 16;
 
 +impl TryFrom<u8> for Class {
 +    type Error = ParseError;
@@ -453,7 +453,7 @@ useやモジュール冒頭の定数を追加する。
  }
 
 +pub fn parse(raw: &[u8]) -> ParseResult<'_, Header> {
-+    if raw.len() < ELF_IDENT_HEADER_SIZE {
++    if raw.len() < ELF_IDENT_SIZE {
 +        return Err(nom::Err::Error(ParseError::InvalidHeaderSize(raw.len() as u8)));
 +    }
 +

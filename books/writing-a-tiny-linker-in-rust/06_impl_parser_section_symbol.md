@@ -353,6 +353,9 @@ pub struct Symbol {
 pub const SYMBOL_UNDEFINED: u16 = 0;
 ```
 
+> 03章で紹介した`STB_WEAK`（弱シンボル）は本書のスコープ外なので`Binding`に含めていない。
+> 標準Cライブラリのリンクなどを扱うと必要になるが、本書のサンプルでは登場しないため省略する。
+
 ### パーサーエラーを追加する
 
 ```diff:src/parser/error.rs
