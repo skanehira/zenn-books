@@ -181,7 +181,7 @@ __asm__(
       "    ldr     w0, [x0]\n"
       "    mov     x8, #93\n"
       "    svc     #0\n"
-)
+);
 EOF
 
 $ cat > sub.c << 'EOF'

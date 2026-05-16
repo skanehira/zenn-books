@@ -178,8 +178,8 @@ $ readelf -s sub.o | grep -E "Ndx| x$"
 ```sh
 $ readelf -S a.out | grep -E "Nr|\.text|\.data"
   [Nr] Name              Type             Address           Offset
-  [ 1] .text             PROGBITS         0000000000400100  00000100
-  [ 2] .data             PROGBITS         0000000000410110  00000110
+  [ 1] .text             PROGBITS         00000000004000e8  000000e8
+  [ 2] .data             PROGBITS         00000000004100f8  000000f8
 ```
 
 ### 再配置（リロケーション）

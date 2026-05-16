@@ -162,6 +162,7 @@ Section Headers:
        0000000000000004  0000000000000000  WA       0     0     4
   [ 3] .bss              NOBITS           0000000000000000  00000044
        0000000000000000  0000000000000000  WA       0     0     1
+  ...  # [4] .comment / [5] .note.GNU-stack は本書では扱わないため省略
   [ 6] .symtab           SYMTAB           0000000000000000  00000070
        00000000000000d8  0000000000000018           7     8     8
   [ 7] .strtab           STRTAB           0000000000000000  00000148
@@ -345,7 +346,7 @@ typedef struct
 
 ```sh
 $ readelf -r main.o
-Relocation section '.rela.text' at offset 0x178 contains 1 entry:
+Relocation section '.rela.text' at offset 0x180 contains 1 entry:
   Offset          Info           Type           Sym. Value    Sym. Name + Addend
 000000000000  000900000112 R_AARCH64_ADR_PRE 0000000000000000 x + 0
 ```
@@ -403,16 +404,18 @@ typedef struct
 ```sh
 $ readelf -l a.out
 Elf file type is EXEC (Executable file)
-Entry point 0x400078
-There are 2 program headers, starting at offset 64
+Entry point 0x4000e8
+There are 3 program headers, starting at offset 64
 
 Program Headers:
   Type           Offset             VirtAddr           PhysAddr
                  FileSiz            MemSiz              Flags  Align
   LOAD           0x0000000000000000 0x0000000000400000 0x0000000000400000
-                 0x0000000000000088 0x0000000000000088  R E    0x10000
-  LOAD           0x0000000000000088 0x0000000000410088 0x0000000000410088
+                 0x00000000000000f8 0x00000000000000f8  R E    0x10000
+  LOAD           0x00000000000000f8 0x00000000004100f8 0x00000000004100f8
                  0x0000000000000004 0x0000000000000004  RW     0x10000
+  GNU_STACK      0x0000000000000000 0x0000000000000000 0x0000000000000000
+                 0x0000000000000000 0x0000000000000000  RW     0x10
 ```
 
 ### elf.hの構造体定義

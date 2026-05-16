@@ -25,11 +25,11 @@ ELFパーサーが完成したので、ここからはリンカー本体の実�
 最終的なコードはざっくり次のようなイメージになる。
 
 ```rust
-pub fn link_to_file(&mut self, inputs: Vec<Vec<u8>>) -> Result<Vec<u8>, Error> {
+pub fn link_to_file(&mut self, inputs: Vec<Vec<u8>>) -> Result<Vec<u8>> {
     // 1. 入力ファイルをパース
-    for input in inputs {
-        let obj = parser::parse_elf(&input)?.1;
-        self.objects.push(obj);
+    for (idx, input) in inputs.iter().enumerate() {
+        let obj = Elf::parse(input).map_err(|e| LinkerError::Parse(format!("{:?}", e)))?;
+        self.add_object(format!("input_{}", idx), obj);
     }
 
     // 2. シンボル解決
@@ -115,7 +115,7 @@ Key to Flags:
 └─────────────────┴──────────────┘
 ```
 
-ベースアドレスは`0x400000`について、GNU `ld`がAArch64 Linux向けにデフォルトで使うベースアドレスがこの値なので、本書の自作リンカーもそれに倣っている。
+ベースアドレス`0x400000`は、GNU `ld`がAArch64 Linux向けにデフォルトで使う値なので、本書の自作リンカーもそれに倣っている。
 
 `.text`と`.data`の間に`0x10000`（64KB）のギャップを空けているのには理由がある。以降で順に説明する。
 
