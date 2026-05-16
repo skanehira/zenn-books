@@ -2,7 +2,7 @@ title: "Rustで小さなリンカーを実装する"
 summary: |
   Rustで変数を終了ステータスとして利用する実行バイナリを生成できる小さなリンカーをゼロから実装して、リンカーの動作原理を理解する本です。
 topics: ["linker", "rust", "elf"]
-published: false
+published: true
 price: 0
 chapters:
   - 01_intro

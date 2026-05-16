@@ -525,8 +525,10 @@ let mut text_offsets: HashMap<(usize, u16), usize> = HashMap::new();
  }
 ```
 
-> セクションインデックスを`symbol.value >= 0x410000`で判定しているのは簡略化のためで、複数の`.text`セクションや`.rodata`などを追加した瞬間に破綻する。
-> 本格的には`ResolvedSymbol`側に出力セクションのインデックスを持たせ、`merge_sections`の中で確定値を書き戻す方式に拡張するのが本筋である。
+:::message
+セクションインデックスを`symbol.value >= 0x410000`で判定しているのは簡略化のためで、複数の`.text`セクションや`.rodata`などを追加した瞬間に破綻する。
+本格的には`ResolvedSymbol`側に出力セクションのインデックスを持たせ、`merge_sections`の中で確定値を書き戻す方式に拡張するのが本筋である。
+:::
 
 ### テストを実行する
 
