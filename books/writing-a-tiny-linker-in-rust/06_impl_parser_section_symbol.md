@@ -2,7 +2,8 @@
 title: "ELFパーサーの実装（2）セクションとシンボル"
 ---
 
-本章では、セクションヘッダーとシンボルテーブルのパースを実装する。
+本章では、セクションヘッダーとシンボルテーブルのパースを実装していく。
+ELFヘッダーから読み取った`shoff`、`shnum`、`shstrndx`を使って各セクションを読み取り、さらにそこから`.symtab`を辿ってシンボルを取り出す、という流れになる。
 
 ## 本章で実装するファイル
 
@@ -55,6 +56,7 @@ $ touch src/parser/helper.rs src/parser/section.rs src/parser/symbol.rs
 ### データ構造を定義する
 
 `src/elf/section.rs`を実装する。
+ヘッダーから読み取ったオフセットとサイズを使ってセクションのデータも取得しておくと、あとでセクションを使うときにいちいち元の`raw`を持ち回らなくて済む。なので`Header`構造体には`data`フィールドも持たせている。
 
 ```rust:src/elf/section.rs
 #[derive(Default, Debug, PartialEq, Eq, Clone, Copy)]
@@ -98,7 +100,8 @@ pub struct Header {
 
 ### 文字列テーブルのヘルパー関数を実装する
 
-セクション名やシンボル名は文字列テーブルに格納されている。オフセットからNULL終端の文字列を取得するヘルパー関数を実装する。
+セクション名やシンボル名は文字列テーブルにNULL終端で格納されている。
+オフセットを渡すとそこからNULLまでを文字列として取り出すヘルパーが必要になるので、先に書いておく。
 
 `src/parser/helper.rs`を実装する。
 
@@ -114,6 +117,8 @@ pub fn get_string(data: &[u8], offset: usize) -> String {
 
 ### パーサーエラーを追加する
 
+セクションタイプの未知の値を弾くエラーを追加する。
+
 ```diff:src/parser/error.rs
      #[error("Invalid version: {0}")]
      InvalidVersion(u32),
@@ -126,6 +131,7 @@ pub fn get_string(data: &[u8], offset: usize) -> String {
 ### テストを書く
 
 `src/parser/section.rs`にテストを書く。
+`sub.o`の`.text`、`.data`、`.symtab`がそれぞれ正しいタイプで読み取れることを確認する。
 
 ```rust:src/parser/section.rs
 #[cfg(test)]
@@ -165,6 +171,9 @@ mod tests {
 ```
 
 ### パース処理を実装する
+
+セクションヘッダー1つぶんの読み取りを`shnum`回繰り返すだけのシンプルな処理である。
+パース後にセクション名を文字列テーブルから解決する一手間が入る。
 
 ```diff:src/parser/section.rs
 +use super::{helper, ParseResult};
@@ -293,6 +302,7 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 ### データ構造を定義する
 
 `src/elf/symbol.rs`を実装する。
+`st_info`は1バイトに2つの情報（バインディングとタイプ）が詰め込まれているので、構造体側ではバラして保持する。
 
 ```rust:src/elf/symbol.rs
 #[derive(Default, Debug, PartialEq, Eq, Clone, Copy)]
@@ -363,6 +373,7 @@ pub const SYMBOL_UNDEFINED: u16 = 0;
 ### テストを書く
 
 `src/parser/symbol.rs`にテストを書く。
+`sub.o`にある変数`x`が`Object`タイプの`Global`シンボルとして取れていればOKとする。
 
 ```rust:src/parser/symbol.rs
 #[cfg(test)]
@@ -394,6 +405,9 @@ mod tests {
 ```
 
 ### パース処理を実装する
+
+`.symtab`セクションを探し、そのリンク先の`.strtab`からシンボル名の文字列テーブルを取得しておく。
+あとは`size / entsize`の数だけシンボルを読み取るだけである。
 
 ```diff:src/parser/symbol.rs
 +use super::{ParseResult, helper};
@@ -506,9 +520,4 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 ## まとめ
 
 本章ではセクションヘッダーとシンボルテーブルのパースを実装した。
-
-- セクションヘッダーの`link`フィールドで関連する文字列テーブルを参照
-- シンボルの`info`フィールドは上位4ビットがバインディング、下位4ビットがタイプ
-- 文字列テーブルからオフセットを使って名前を解決
-
-次章では、再配置情報のパースを実装する。
+次章では、最後のパーサー要素である再配置情報のパースを実装する。

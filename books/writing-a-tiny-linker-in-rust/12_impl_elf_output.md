@@ -2,7 +2,7 @@
 title: "ELF出力の実装"
 ---
 
-本章では、実行可能なELFファイルを出力する処理を実装する。
+本章では、ここまでで作ってきたセクションたちを、実行可能なELFファイルとして書き出す処理を実装する。
 
 ## 本章で実装するファイル
 
@@ -10,7 +10,7 @@ title: "ELF出力の実装"
 src/
 ├── elf.rs             # 本章（モジュール追加）
 ├── elf/
-│   ├── header.rs         # 本章（to_vec追加）
+│   ├── header.rs         # 本章（to_bytes追加）
 │   ├── program_header.rs # 本章
 │   └── segment.rs        # 本章
 ├── linker.rs          # 本章（モジュール追加）
@@ -20,8 +20,6 @@ src/
 ```
 
 ## モジュール構造を更新する
-
-LSPが正しく動作するように、最初にモジュール宣言と空のファイルを作成する。
 
 ### elf.rsを更新する
 
@@ -53,11 +51,16 @@ $ touch src/elf/program_header.rs src/elf/segment.rs
 $ touch src/linker/writer.rs
 ```
 
-## セグメントフラグの定義
+## プログラムヘッダー
 
-### テストを書く
+ELFには「セクション」とは別に「セグメント」という概念がある。
+セグメントは実行時にOSがメモリにロードする単位で、それぞれに読み取り・書き込み・実行の権限が付く。
 
-`src/elf/segment.rs`にセグメント型とフラグ、テストを追加する。
+セグメント自体は実行時の概念で、ELFファイルの中ではプログラムヘッダー（Program Header）としてそのメタデータが記録される。
+
+### セグメントの種類と権限フラグ
+
+`src/elf/segment.rs`にセグメントの`Type`と`Flag`を定義する。
 
 ```rust:src/elf/segment.rs
 #[derive(Debug, Clone, Copy)]
@@ -73,35 +76,11 @@ pub enum Flag {
     Writable = 0x2,
     Readable = 0x4,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn flag_returns_correct_values() {
-        assert_eq!(Flag::Executable as u32, 0x1);
-        assert_eq!(Flag::Writable as u32, 0x2);
-        assert_eq!(Flag::Readable as u32, 0x4);
-    }
-}
 ```
 
-### テストを実行する
+### プログラムヘッダー構造体
 
-```sh
-$ cargo test elf::segment::tests::flag_returns_correct_values
-running 1 test
-test elf::segment::tests::flag_returns_correct_values ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
-```
-
-## プログラムヘッダーの構造体
-
-### テストを書く
-
-`src/elf/program_header.rs`にProgramHeader構造体とテストを追加する。
+`src/elf/program_header.rs`に`ProgramHeader`構造体を追加する。
 
 ```rust:src/elf/program_header.rs
 use super::segment::{Flag, Type};
@@ -117,49 +96,17 @@ pub struct ProgramHeader {
     pub memsz: u64,
     pub align: u64,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn program_header_creation() {
-        let ph = ProgramHeader {
-            r#type: Type::Load,
-            flags: vec![Flag::Readable, Flag::Executable],
-            offset: 0,
-            vaddr: 0x400000,
-            paddr: 0x400000,
-            filesz: 0x100,
-            memsz: 0x100,
-            align: 0x10000,
-        };
-
-        assert_eq!(ph.vaddr, 0x400000);
-        assert_eq!(ph.flags.len(), 2);
-    }
-}
-```
-
-### テストを実行する
-
-```sh
-$ cargo test elf::program_header::tests::program_header_creation
-running 1 test
-test elf::program_header::tests::program_header_creation ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 
 ## ELFヘッダーのシリアライズ
 
-### テストを書く
+ELFヘッダーは構造体としてはすでに作ってあるが、ファイルに書き出すためにバイト列へのシリアライズが必要になるので、`to_bytes`メソッドとして追加する。
 
-`src/elf/header.rs`にテストを書く。テストをコンパイルするために、最小限のスタブも一緒に追加する。
+### テストを書く
 
 ```diff:src/elf/header.rs
  impl Header {
-+    pub fn to_vec(&self) -> Vec<u8> {
++    pub fn to_bytes(&self) -> Vec<u8> {
 +        todo!()
 +    }
  }
@@ -171,7 +118,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 +    use super::*;
 +
 +    #[test]
-+    fn header_to_vec_returns_64_bytes() {
++    fn header_to_bytes_returns_64_bytes() {
 +        let header = Header {
 +            ident: Ident {
 +                class: Class::Bit64,
@@ -195,7 +142,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 +            shstrndx: 5,
 +        };
 +
-+        let bytes = header.to_vec();
++        let bytes = header.to_bytes();
 +        assert_eq!(bytes.len(), 64);
 +
 +        // マジックナンバー
@@ -204,15 +151,16 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
  }
 ```
 
-### to_vecメソッドを実装する
+### to_bytesメソッドを実装する
+
+パース時の逆をやるだけで、構造体定義の順番どおりに値を書き出していく。
 
 ```diff:src/elf/header.rs
  impl Header {
-     pub fn to_vec(&self) -> Vec<u8> {
+     pub fn to_bytes(&self) -> Vec<u8> {
 -        todo!()
 +        let mut bytes = Vec::with_capacity(64);
 +
-+        // e_ident (16バイト)
 +        bytes.extend_from_slice(&[0x7f, b'E', b'L', b'F']); // マジック
 +        bytes.push(self.ident.class as u8);
 +        bytes.push(self.ident.data as u8);
@@ -221,31 +169,18 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 +        bytes.push(self.ident.abi_version);
 +        bytes.extend_from_slice(&[0u8; 7]); // パディング
 +
-+        // e_type (2バイト)
 +        bytes.extend_from_slice(&(self.r#type as u16).to_le_bytes());
-+        // e_machine (2バイト)
 +        bytes.extend_from_slice(&(self.machine as u16).to_le_bytes());
-+        // e_version (4バイト)
 +        bytes.extend_from_slice(&(self.version as u32).to_le_bytes());
-+        // e_entry (8バイト)
 +        bytes.extend_from_slice(&self.entry.to_le_bytes());
-+        // e_phoff (8バイト)
 +        bytes.extend_from_slice(&self.phoff.to_le_bytes());
-+        // e_shoff (8バイト)
 +        bytes.extend_from_slice(&self.shoff.to_le_bytes());
-+        // e_flags (4バイト)
 +        bytes.extend_from_slice(&self.flags.to_le_bytes());
-+        // e_ehsize (2バイト)
 +        bytes.extend_from_slice(&self.ehsize.to_le_bytes());
-+        // e_phentsize (2バイト)
 +        bytes.extend_from_slice(&self.phentsize.to_le_bytes());
-+        // e_phnum (2バイト)
 +        bytes.extend_from_slice(&self.phnum.to_le_bytes());
-+        // e_shentsize (2バイト)
 +        bytes.extend_from_slice(&self.shentsize.to_le_bytes());
-+        // e_shnum (2バイト)
 +        bytes.extend_from_slice(&self.shnum.to_le_bytes());
-+        // e_shstrndx (2バイト)
 +        bytes.extend_from_slice(&self.shstrndx.to_le_bytes());
 +
 +        bytes
@@ -256,18 +191,19 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ### テストを実行する
 
 ```sh
-$ cargo test elf::header::tests::header_to_vec
+$ cargo test elf::header::tests::header_to_bytes
 running 1 test
-test elf::header::tests::header_to_vec_returns_64_bytes ... ok
+test elf::header::tests::header_to_bytes_returns_64_bytes ... ok
 
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 
 ## ELF出力の実装
 
-### テストを書く
+部品がそろったので、いよいよELFファイル全体を書き出す処理を実装する。
+書き出す順番はELFヘッダー → プログラムヘッダー → セクションデータ → セクションヘッダーで、ファイル内のオフセットとアドレスを意識しながら順に流し込んでいく。
 
-`src/linker/writer.rs`にテストを書く。テストをコンパイルするために、最小限のスタブも一緒に追加する。
+### テストを書く
 
 ```rust:src/linker/writer.rs
 use std::collections::HashMap;
@@ -302,7 +238,7 @@ mod tests {
         let main_o = include_bytes!("../parser/fixtures/main.o");
         let sub_o = include_bytes!("../parser/fixtures/sub.o");
 
-        let mut linker = Linker::new();
+        let mut linker = Linker::default();
         linker.add_object("main.o".to_string(), Elf::parse(main_o).unwrap());
         linker.add_object("sub.o".to_string(), Elf::parse(sub_o).unwrap());
 
@@ -369,7 +305,7 @@ mod tests {
 +
 +        // ELFヘッダーを書き出し
 +        let elf_header = self.create_elf_header(entry, &section_tables);
-+        writer.write_all(&elf_header.to_vec())?;
++        writer.write_all(&elf_header.to_bytes())?;
 +
 +        // プログラムヘッダーを書き出し
 +        let program_headers = self.create_program_headers(&section_tables);
@@ -603,38 +539,37 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
 ## 出力ファイルの構造
 
-最終的に出力されるELFファイルの構造は次のようになる。
+最終的にでき上がるELFファイルのレイアウトは次のようになる。
 
 ```
 ファイルオフセット
 ┌─────────────────┬──────────────┐
-│ 0x0000          │ ELFヘッダー  │  64バイト
+│ 0x0000          │ ELF Header   │  64バイト
 ├─────────────────┼──────────────┤
-│ 0x0040          │ プログラム   │  56バイト × 2
-│                 │ ヘッダー     │
+│ 0x0040          │ Program      │  56バイト × 2
+│                 │ Header       │
 ├─────────────────┼──────────────┤
 │ 0x0100          │ .text        │  コードデータ
 ├─────────────────┼──────────────┤
 │ 0x0110          │ .data        │  データ
 ├─────────────────┼──────────────┤
-│ ...             │ .strtab      │  文字列テーブル
+│ 0x0114          │ .strtab      │  シンボル名の文字列テーブル
 ├─────────────────┼──────────────┤
-│ ...             │ .symtab      │  シンボルテーブル
+│ 0x0138          │ .symtab      │  シンボルテーブル
 ├─────────────────┼──────────────┤
-│ ...             │ .shstrtab    │  セクション名テーブル
+│ 0x01b0          │ .shstrtab    │  セクション名の文字列テーブル
 ├─────────────────┼──────────────┤
-│ 0x01e0          │ セクション   │  64バイト × 6
-│                 │ ヘッダー     │
+│ 0x01d8          │ Section      │  64バイト × 6
+│                 │ Header       │
 └─────────────────┴──────────────┘
 ```
 
 ## まとめ
 
-本章ではELF出力を実装した。
+本章ではELFファイルへの書き出しを実装した。
 
-- `todo!()`でスタブを作成してからテストを書く
-- ELFヘッダー: ファイルの種類、エントリポイント、セクションヘッダーの位置などを記録
-- プログラムヘッダー: OSがメモリにロードするセグメント情報
-- セクションヘッダー: 各セクションのメタデータ
+- ELFヘッダー：ファイルの種類、エントリポイント、セクションヘッダーの位置などを記録する
+- プログラムヘッダー：OSがメモリにロードするセグメントの情報
+- セクションヘッダー：各セクションのメタデータ
 
-次章では、すべてを統合して実行可能バイナリを生成する。
+これでリンカーの全パーツがそろった。次章ではすべてを統合し、`tiny-linker`コマンドとして動かせるようにする。

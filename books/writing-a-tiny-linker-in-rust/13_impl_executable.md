@@ -2,7 +2,9 @@
 title: "実行バイナリの生成"
 ---
 
-本章では、これまで実装してきたすべての処理を統合し、実行可能バイナリを生成する。
+最終章である。
+ここまで実装したパーツを全部つなげ、CLIから叩ける`tiny-linker`コマンドとして仕上げる。
+最後には実際に`a.out`を生成して動かしてみる、本書の集大成となる章である。
 
 ## 本章で実装するファイル
 
@@ -14,9 +16,10 @@ src/
 
 ## link_to_file関数の実装
 
-### テストを書く
+各処理を順番に呼ぶだけのシンプルなオーケストレーション関数を、`Linker`に追加する。
+8章で全体像として見せた疑似コードを、ほぼそのまま実装に落とす形になる。
 
-`src/linker.rs`にテストを書く。テストをコンパイルするために、最小限のスタブも一緒に追加する。
+### テストを書く
 
 ```diff:src/linker.rs
 +use std::io::Cursor;
@@ -31,10 +34,6 @@ src/
  }
 
  impl Linker {
-     pub fn new() -> Self {
-         Self::default()
-     }
-
      pub fn add_object(&mut self, name: String, obj: Elf) {
          self.object_names.push(name);
          self.objects.push(obj);
@@ -51,24 +50,12 @@ src/
  mod tests {
      use super::*;
 
-     #[test]
-     fn add_object_appends_to_lists() {
-         let raw = include_bytes!("parser/fixtures/sub.o");
-         let elf = crate::parser::Elf::parse(raw).unwrap();
-
-         let mut linker = Linker::new();
-         linker.add_object("sub.o".to_string(), elf);
-
-         assert_eq!(linker.objects.len(), 1);
-         assert_eq!(linker.object_names[0], "sub.o");
-     }
-+
 +    #[test]
 +    fn link_to_file_returns_valid_elf() {
 +        let main_o = include_bytes!("parser/fixtures/main.o").to_vec();
 +        let sub_o = include_bytes!("parser/fixtures/sub.o").to_vec();
 +
-+        let mut linker = Linker::new();
++        let mut linker = Linker::default();
 +        let output = linker.link_to_file(vec![main_o, sub_o]).unwrap();
 +
 +        // ELFマジックナンバー
@@ -101,7 +88,7 @@ src/
 +        let (output_sections, section_name_offsets) =
 +            self.layout_sections(&mut resolved_symbols)?;
 +
-+        // 4. 実行可能ファイルを書き出し
++        // 4. 実行ファイルを書き出し
 +        let mut out = Cursor::new(Vec::new());
 +        self.write_executable(
 +            &mut out,
@@ -126,7 +113,8 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
 ## main関数の実装
 
-CLIインターフェースを実装する。
+CLIから叩けるようにする。
+出力ファイルには実行権限が必要なので、`OpenOptions`で`mode(0o755)`を指定して開いている。
 
 ```rust:src/main.rs
 use std::env;
@@ -154,7 +142,7 @@ fn main() -> Result<(), LinkerError> {
         .collect::<Result<Vec<_>, _>>()?;
 
     // リンカーを実行
-    let mut linker = Linker::new();
+    let mut linker = Linker::default();
     let output = linker.link_to_file(inputs)?;
 
     // 出力ファイルを作成（実行権限付き）
@@ -178,7 +166,8 @@ fn create_output_file(path: &Path) -> Result<std::fs::File, std::io::Error> {
 
 ## 動作確認
 
-実装したリンカーを使って、実行可能バイナリを生成してみる。
+ようやく実際に動かす段階である。
+2章で作成した`main.c`と`sub.c`を題材に、自作リンカーで`a.out`を生成してみる。
 
 ### 1. オブジェクトファイルの作成
 
@@ -219,11 +208,11 @@ $ echo $?
 11
 ```
 
-終了ステータスが`11`となり、正しくリンクされていることが確認できた。
+終了ステータスが`11`になっていれば成功。
 
 ### 4. readelfでの確認
 
-生成されたELFファイルを確認する。
+念のため、生成されたELFファイルを`readelf`でも見てみる。
 
 ```sh
 $ readelf -h a.out
@@ -239,11 +228,11 @@ ELF Header:
   Version:                           0x1
   Entry point address:               0x400100
   Start of program headers:          64 (bytes into file)
-  Start of section headers:          480 (bytes into file)
+  Start of section headers:          472 (bytes into file)
   ...
 
 $ readelf -S a.out
-There are 6 section headers, starting at offset 0x1e0:
+There are 6 section headers, starting at offset 0x1d8:
 
 Section Headers:
   [Nr] Name              Type             Address           Offset
@@ -260,63 +249,28 @@ $ readelf -s a.out
 Symbol table '.symtab' contains 5 entries:
    Num:    Value          Size Type    Bind   Vis      Ndx Name
      0: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT  UND
-     1: 0000000000400100     0 NOTYPE  GLOBAL DEFAULT    1 _start
-     2: 0000000000410110     4 OBJECT  GLOBAL DEFAULT    2 x
-     ...
+     1: 0000000000410110     0 NOTYPE  LOCAL  DEFAULT    2 $d
+     2: 0000000000400100     0 NOTYPE  LOCAL  DEFAULT    1 $x
+     3: 0000000000400100     0 NOTYPE  GLOBAL DEFAULT    1 _start
+     4: 0000000000410110     4 OBJECT  GLOBAL DEFAULT    2 x
 ```
 
-## デバッグとトラブルシューティング
+エントリポイントもセクション配置もシンボルテーブルも、想定どおりの形になっている。
 
-### よくある問題
-
-**1. シンボルが解決されない**
-
-```
-Error: Unresolved symbols: ["x"]
-```
-
-原因: シンボル`x`を定義しているオブジェクトファイルがリンク対象に含まれていない。
-対策: 必要なオブジェクトファイルをすべて指定する。
-
-**2. エントリポイントが見つからない**
-
-```
-Error: Missing entry point: _start
-```
-
-原因: `_start`シンボルが定義されていない。
-対策: `_start`を定義したオブジェクトファイルをリンク対象に含める。
-
-**3. 実行時にSegmentation fault**
-
-原因: 再配置が正しく行われていない可能性がある。
-対策: `readelf -r`で再配置情報を確認し、デバッグする。
-
-### デバッグのコツ
-
-1. `readelf`を使って各段階の出力を確認
-2. 標準の`ld`でリンクした結果と比較
-3. `objdump -d`で命令のエンコーディングを確認
+補足: `$d`と`$x`は`gcc`がARM64向けに自動で付与する mapping symbol で、コードとデータの境界を示すために使われている。
 
 ## まとめ
 
-本書では、Rustで小さなリンカーを実装した。主なポイントは次のとおり。
+本書ではRustで小さなリンカーを実装した。
+次の5ステップで、リンカーが何をやっているのかを一通り理解出来たと思う。
 
-1. **ELFパーサー**: `nom`を使ってELFバイナリをパース
-2. **シンボル解決**: 未定義シンボルと定義済みシンボルを紐付け
-3. **セクション配置**: `.text`と`.data`をマージし、アドレスを割り当て
-4. **再配置**: `R_AARCH64_ADR_PREL_LO21`の処理を実装
-5. **ELF出力**: 実行可能なELFファイルを生成
+1. ELFパーサー：`nom`を使ってELFバイナリをパース
+2. シンボル解決：未定義シンボルと定義済みシンボルを紐付け
+3. セクション配置：`.text`と`.data`をマージして、アドレスを割り当て
+4. 再配置：`R_AARCH64_ADR_PREL_LO21`の処理を実装
+5. ELF出力：実行可能なELFファイルを生成
 
-## 今後の展望
+本書では、簡単なリンカーの実装のみだったが、もう少し深く知りたい方はぜひ、こちらの本を買って読んでみてほしい。
+本書の内容ももちろん、より詳しくリンカー周りについて書かれているので、深堀りするには丁度良い本となっている。
 
-本書で実装したリンカーは最小限の機能のみをサポートしている。発展として次のような機能を実装できる。
-
-- **動的リンク**: 共有ライブラリのサポート（`.so`ファイル、PLT/GOT）
-- **追加の再配置タイプ**: `R_AARCH64_CALL26`、`R_AARCH64_ABS64`など
-- **他のアーキテクチャ**: x86_64、RISC-Vなど
-- **追加セクション**: `.bss`、`.rodata`など
-- **デバッグ情報**: DWARF情報のサポート
-
-リンカーの実装を通じて、コンパイルから実行可能ファイル生成までの流れを深く理解できた。
-この知識は、低レベルプログラミングやシステムプログラミングにおいて非常に役立つ。
+https://www.amazon.co.jp/dp/4789838072

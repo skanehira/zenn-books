@@ -2,7 +2,8 @@
 title: "ELFパーサーの実装（1）ヘッダー"
 ---
 
-本章からELFパーサーの実装を始める。まずはプロジェクトのセットアップとELFヘッダーのパースを実装する。
+本章からELFパーサーの実装に入る。
+まずはプロジェクトのセットアップを済ませ、ELFヘッダーのパースを書いていく。
 
 ## プロジェクトのセットアップ
 
@@ -29,11 +30,13 @@ thiserror = "2.0"
 pretty_assertions = "1.4"
 ```
 
-[nom](https://github.com/Geal/nom)はRustで書かれた高速なパーサーコンビネーターライブラリで、バイナリデータのパースに適している。パーサーコンビネーターとは、小さなパーサーを組み合わせて複雑なパーサーを構築する手法である。
+[nom](https://github.com/Geal/nom)はRustで書かれたパーサーコンビネーターライブラリで、バイナリのパースに向いている。
+パーサーコンビネーターというのは、小さなパーサーを部品として組み合わせて大きなパーサーを組み上げる手法である。
+筆者は以前のWasm Runtime本でも使っていて手に馴染んでいるので、本書でもそのまま採用した。
 
 ## ディレクトリ構成
 
-最終的なディレクトリ構成は次のようになる。本章では太字のファイルを実装する。
+最終的なディレクトリ構成は次のとおり。本章ではコメントが付いているファイルを実装する。
 
 ```
 src/
@@ -65,7 +68,7 @@ src/
 
 ## モジュール構造を作成する
 
-LSPが正しく動作するように、最初にモジュール構造を作成する。
+LSPがちゃんと効くように、最初に空のモジュールも含めて構造を作っておく。
 
 ### lib.rsを作成する
 
@@ -93,7 +96,7 @@ pub type ParseResult<'a, T> = nom::IResult<&'a [u8], T, ParseError>;
 
 ### 空のモジュールファイルを作成する
 
-LSPが動作するように、空のファイルを作成しておく。
+LSPが動くように、中身が空のファイルも先に作っておく。
 
 ```sh
 $ mkdir -p src/elf src/parser
@@ -102,7 +105,7 @@ $ touch src/elf/header.rs src/parser/error.rs src/parser/header.rs
 
 ## テストフィクスチャの準備
 
-テストに使用するオブジェクトファイルを作成する。2章で作成した`sub.c`をコンパイルしてフィクスチャとして配置する。
+テストでは2章で作成した`sub.o`を使うので、フィクスチャとして配置しておく。
 
 ```sh
 $ mkdir -p src/parser/fixtures
@@ -166,6 +169,7 @@ impl<I> nom::error::FromExternalError<I, ParseError> for ParseError {
 ## ELFヘッダーのデータ構造を定義する
 
 `src/elf/header.rs`を実装する。
+バイナリから読み取った値を意味のある型に落とし込めるよう、フィールドの種類ごとに`enum`を切っていく。
 
 ```rust:src/elf/header.rs
 #[derive(Default, Debug, PartialEq, Eq, Clone, Copy)]
@@ -262,7 +266,7 @@ pub struct Header {
 
 ### テストを書く
 
-`src/parser/header.rs`にテストを書く。
+まずは`src/parser/header.rs`にテストから書いていく。
 
 ```rust:src/parser/header.rs
 #[cfg(test)]
@@ -286,6 +290,8 @@ mod tests {
 
 ### パース処理を実装する
 
+useやモジュール冒頭の定数を追加する。
+
 ```diff:src/parser/header.rs
 +use super::ParseResult;
 +use crate::elf::header::{
@@ -304,7 +310,8 @@ mod tests {
  mod tests {
 ```
 
-各列挙型にバイト値からの変換を実装する。
+各列挙型に、生のバイト値からの変換を実装する。
+ここでは`TryFrom`を使うことで、未知の値が来たらエラーにするようにしている。
 
 ```diff:src/parser/header.rs
  const ELF_MAGIC_NUMBER: [u8; 4] = [0x7f, 0x45, 0x4c, 0x46];
@@ -397,7 +404,8 @@ mod tests {
  mod tests {
 ```
 
-マジックナンバーとELF識別子のパース関数を実装する。
+次にマジックナンバーとELF識別子のパース関数を実装する。
+最初にマジックナンバーをチェックして、ELFファイルでなければ早期にエラーで返す。
 
 ```diff:src/parser/header.rs
  }
@@ -437,7 +445,8 @@ mod tests {
  mod tests {
 ```
 
-ELFヘッダー全体をパースする関数を実装する。
+最後にELFヘッダー全体をパースする関数を実装する。
+やっていることは、`elf.h`の構造体定義の順番どおりに各フィールドを読み取っているだけである。
 
 ```diff:src/parser/header.rs
      Ok((rest, ident))
@@ -517,7 +526,7 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 ## 不正なELFファイルのテストを追加
 
-マジックナンバーが不正な場合のテストを追加する。
+ハッピーパスだけでなく、ELFじゃないファイルが渡された場合のテストも書いておく。
 
 ```diff:src/parser/header.rs
  #[cfg(test)]
@@ -567,10 +576,5 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 ## まとめ
 
-本章ではELFヘッダーのパースを実装した。
-
-- `nom`パーサーコンビネーターを使ってバイナリをパース
-- `TryFrom`トレイトを使ってバイト値から列挙型への変換を実装
-- `map_res`コンビネーターでパースと変換を組み合わせ
-
-次章では、セクションヘッダーとシンボルテーブルのパースを実装する。
+本章ではELFヘッダーのパースまで実装した。`nom`を使うとバイナリのパースがすっきり書けるのは便利。
+次章では、セクションヘッダーとシンボルテーブルのパースを実装していく。

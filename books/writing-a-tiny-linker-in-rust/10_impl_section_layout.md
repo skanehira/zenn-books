@@ -2,7 +2,8 @@
 title: "セクション配置の実装"
 ---
 
-本章では、セクション配置の実装を行う。複数のオブジェクトファイルからセクションをマージし、メモリアドレスを割り当てる。
+本章ではセクション配置を実装していく。
+各オブジェクトファイルから`.text`や`.data`を集めてマージし、それぞれをメモリ上のどのアドレスに置くかを決める処理である。
 
 ## 本章で実装するファイル
 
@@ -35,9 +36,8 @@ $ touch src/linker/section.rs
 
 ## 出力セクションの構造体
 
-### テストを書く
-
-`src/linker/output.rs`にSection構造体とテストを追加する。
+リンク後のセクションを表す`Section`構造体を追加する。
+パース時の`elf::section::Header`とは別物で、こちらは「最終的にファイルに書き出すセクション」のための型である。
 
 ```diff:src/linker/output.rs
 +use std::borrow::Cow;
@@ -61,48 +61,14 @@ $ touch src/linker/section.rs
  pub struct ResolvedSymbol {
 ```
 
-```diff:src/linker/output.rs
- #[cfg(test)]
- mod tests {
-     use super::*;
--    use crate::elf::symbol::SymbolType;
-+    use crate::elf::symbol::{Binding, SymbolType};
-+
-+    #[test]
-+    fn section_creation() {
-+        let section = Section {
-+            name: Cow::Borrowed(".text"),
-+            r#type: SectionType::ProgBits,
-+            flags: vec![SectionFlag::Alloc, SectionFlag::ExecInstr],
-+            addr: 0x400100,
-+            offset: 0x100,
-+            size: 16,
-+            data: Cow::Owned(vec![0u8; 16]),
-+            align: 4,
-+        };
-+
-+        assert_eq!(section.name, ".text");
-+        assert_eq!(section.addr, 0x400100);
-+    }
-
-     fn make_symbol(binding: Binding, is_defined: bool) -> ResolvedSymbol {
-```
-
-### テストを実行する
-
-```sh
-$ cargo test linker::output::tests::section_creation
-running 1 test
-test linker::output::tests::section_creation ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
-```
-
 ## アラインメント関数
+
+セクションのアドレスを計算するときに、よく「指定した境界に切り上げる」という処理が出てくる。
+ここでまとめて`align`関数として用意しておく。
 
 ### テストを書く
 
-`src/linker/section.rs`にテストを書く。テストをコンパイルするために、最小限のスタブも一緒に追加する。
+`src/linker/section.rs`にテストを書く。
 
 ```rust:src/linker/section.rs
 /// 値を指定した2のべき乗の境界に揃える
@@ -133,6 +99,8 @@ mod tests {
 
 ### align関数を実装する
 
+`alignment`が2のべき乗であることを前提にしたビット演算で書ける。
+
 ```diff:src/linker/section.rs
  /// 値を指定した2のべき乗の境界に揃える
 -pub fn align(_value: u64, _alignment: u64) -> u64 {
@@ -154,9 +122,10 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
 ## セクション配置の実装
 
-### テストを書く
+ここからが本題のセクション配置である。
+やることは大きく3つで、各オブジェクトの`.text`/`.data`をマージし、メモリアドレスを割り当て、シンボルのアドレスを更新していく。
 
-`src/linker/section.rs`にテストを書く。テストをコンパイルするために、最小限のスタブも一緒に追加する。
+### テストを書く
 
 ```diff:src/linker/section.rs
 +use std::borrow::Cow;
@@ -168,7 +137,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 +use super::output::{ResolvedSymbol, Section};
 +use super::Linker;
 +
-+/// 実行可能ファイルのベースアドレス
++/// 実行ファイルのベースアドレス
 +pub static BASE_ADDR: u64 = 0x400000;
 +
  /// 値を指定した2のべき乗の境界に揃える
@@ -213,7 +182,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 +        let main_o = include_bytes!("../parser/fixtures/main.o");
 +        let sub_o = include_bytes!("../parser/fixtures/sub.o");
 +
-+        let mut linker = Linker::new();
++        let mut linker = Linker::default();
 +        linker.add_object("main.o".to_string(), Elf::parse(main_o).unwrap());
 +        linker.add_object("sub.o".to_string(), Elf::parse(sub_o).unwrap());
 +
@@ -240,6 +209,8 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 
 ### セクション配置を実装する
+
+少し長くなるが、やっていることは「マージ」「アドレス割り当て」「シンボル更新」「シンボルテーブルと文字列テーブルの作成」を順番にやっているだけである。
 
 ```diff:src/linker/section.rs
  impl Linker {
@@ -420,9 +391,6 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 +        // 最初のエントリはNULLシンボル（24バイト）
 +        symtab.extend_from_slice(&[0u8; 24]);
 +
-+        // ローカルシンボル数をカウント
-+        let mut local_count = 1u32; // NULLシンボル分
-+
 +        // ローカルシンボルを先に追加
 +        for symbol in resolved_symbols.values() {
 +            if symbol.info.binding != Binding::Local {
@@ -431,7 +399,6 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 +            if symbol.name.is_empty() || symbol.info.r#type == SymbolType::File {
 +                continue;
 +            }
-+            local_count += 1;
 +            self.write_symbol_entry(&mut symtab, symbol, &symbol_name_offsets);
 +        }
 +
@@ -528,10 +495,9 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
 ## シンボルアドレス更新の仕組み
 
-セクションをマージした後、各シンボルのアドレスを更新する必要がある。
+セクションをマージしたあと、シンボルが指すアドレスは元のオブジェクトファイル内のオフセットから、最終的なメモリアドレスに変える必要がある。
 
-例えば、`sub.o`の変数`x`は元々`.data`セクションのオフセット0にあった。
-マージ後は次のようにアドレスが計算される。
+たとえば`sub.o`の変数`x`は、もともと`.data`セクションのオフセット0にある。マージ後のアドレスは次のように計算する。
 
 ```
 x のアドレス = .dataセクションのアドレス + sub.oの.dataオフセット + 元のオフセット
@@ -539,7 +505,7 @@ x のアドレス = .dataセクションのアドレス + sub.oの.dataオフセ
             = 0x410110
 ```
 
-同様に、`main.o`の`_start`は`.text`セクションのオフセット0にあった。
+`main.o`の`_start`は`.text`セクションのオフセット0にあるので、
 
 ```
 _start のアドレス = .textセクションのアドレス + main.oの.textオフセット + 元のオフセット
@@ -547,14 +513,15 @@ _start のアドレス = .textセクションのアドレス + main.oの.textオ
                  = 0x400100
 ```
 
+となる。`text_offsets`や`data_offsets`に「マージ後のオフセット」を記録しておいたのは、ここで使うためである。
+
 ## まとめ
 
 本章ではセクション配置を実装した。
 
-- `todo!()`でスタブを作成してからテストを書く
-- `align`関数で値を2のべき乗の境界に揃える
-- 複数オブジェクトの`.text`と`.data`をマージ
-- マージ後のオフセットを記録し、シンボルアドレスを更新
-- `.text`は`0x400100`、`.data`は`.text`の後に`0x10000`のギャップを設けて配置
+- `align`関数で値を2のべき乗の境界に切り上げる
+- 複数オブジェクトの`.text`/`.data`をマージする
+- マージ後のオフセットを記録しておき、シンボルアドレスを更新する
+- `.text`は`0x400100`、`.data`は`.text`のあとに`0x10000`のギャップを空けて配置する
 
-次章では、再配置の適用を実装する。
+ここまでで「どこに何を置くか」が決まった。次章では、その情報を使って実際にシンボル参照を実アドレスに書き換える、再配置を実装していく。

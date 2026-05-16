@@ -2,7 +2,8 @@
 title: "シンボル解決の実装"
 ---
 
-本章では、シンボル解決の実装を行う。シンボル解決はリンカーの最も重要な処理の1つである。
+本章ではシンボル解決を実装していく。
+リンカーの肝となる処理の1つで、ここがちゃんと動かないとそもそもリンクが成立しない、というくらい重要な部分である。
 
 ## 本章で実装するファイル
 
@@ -44,7 +45,8 @@ pub mod symbol;
 
 ## エラー型の定義
 
-`src/error.rs`にエラー型を追加する。
+リンカー全体で使うエラー型を`src/error.rs`に定義しておく。
+シンボル解決だけでなく、後続の章で出てくるIOやパースのエラーもまとめて入れておく。
 
 ```rust:src/error.rs
 use thiserror::Error;
@@ -72,9 +74,8 @@ pub type Result<T> = std::result::Result<T, LinkerError>;
 
 ## Linker構造体の定義
 
-### テストを書く
-
-`src/linker.rs`にテストを書く。テストをコンパイルするために、最小限のスタブも一緒に追加する。
+リンカー本体の入れ物になる`Linker`構造体を作る。
+今のところは入力のオブジェクトファイル一覧と、それぞれの名前（エラーメッセージ用）を持つだけのシンプルな構造である。
 
 ```rust:src/linker.rs
 pub mod output;
@@ -89,69 +90,21 @@ pub struct Linker {
 }
 
 impl Linker {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn add_object(&mut self, name: String, obj: Elf) {
-        todo!()
+        self.object_names.push(name);
+        self.objects.push(obj);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn add_object_appends_to_lists() {
-        let raw = include_bytes!("parser/fixtures/sub.o");
-        let elf = crate::parser::Elf::parse(raw).unwrap();
-
-        let mut linker = Linker::new();
-        linker.add_object("sub.o".to_string(), elf);
-
-        assert_eq!(linker.objects.len(), 1);
-        assert_eq!(linker.object_names[0], "sub.o");
-    }
-}
-```
-
-### add_objectを実装する
-
-`todo!()`を実装に置き換える。
-
-```diff:src/linker.rs
-     pub fn add_object(&mut self, name: String, obj: Elf) {
--        todo!()
-+        self.object_names.push(name);
-+        self.objects.push(obj);
-     }
-```
-
-### テストを実行する
-
-```sh
-$ cargo test linker::tests::add_object
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.01s
-     Running unittests src/lib.rs (target/debug/deps/tiny_linker-5558fbb2f7e5f511)
-
-running 1 test
-test linker::tests::add_object_appends_to_lists ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
-
-     Running unittests src/main.rs (target/debug/deps/tiny_linker-bfb6a3022e853684)
-
-running 0 tests
-
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ```
 
 ## 解決済みシンボルの構造体
 
+シンボル解決の結果を入れるための`ResolvedSymbol`構造体を用意する。
+元の`Symbol`との違いは、どのオブジェクトに属するかや、定義済みかどうかといった「リンカーが解決過程で必要になる情報」を持っている点である。
+
 ### テストを書く
 
-`src/linker/output.rs`にResolvedSymbol構造体のスタブとテストを追加する。テストをコンパイルするために、最小限のスタブも一緒に追加する。
+`src/linker/output.rs`に`ResolvedSymbol`構造体のスタブとテストを追加する。
 
 ```rust:src/linker/output.rs
 use crate::elf::symbol::{self, Binding};
@@ -209,10 +162,12 @@ mod tests {
 }
 ```
 
-バインディングの強さは `Local > Global` の順である。
+シンボルの「強さ」のルールはシンプルで、`Local > Global`である。
 
-- **Local**: ファイル内のみで有効。他のファイルから参照されない
-- **Global**: 他のファイルから参照可能
+- Local: ファイル内のみで有効。他のファイルから参照されない
+- Global: 他のファイルから参照可能
+
+同じ名前のシンボルが複数ある場合、強い方が勝つ。
 
 ### is_stronger_thanを実装する
 
@@ -254,7 +209,8 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 ### テストを書く
 
-`src/linker/symbol.rs`にテストを書く。テストをコンパイルするために、最小限のスタブも一緒に追加する。
+ここでも先にテストを書く。
+正常系（`main.o`の未定義`x`が`sub.o`の定義済み`x`で解決される）と、異常系（必要なシンボルが見つからない）の2つを用意する。
 
 ```rust:src/linker/symbol.rs
 use std::collections::HashMap;
@@ -280,7 +236,7 @@ mod tests {
         let main_o = include_bytes!("../parser/fixtures/main.o");
         let sub_o = include_bytes!("../parser/fixtures/sub.o");
 
-        let mut linker = Linker::new();
+        let mut linker = Linker::default();
         linker.add_object("main.o".to_string(), Elf::parse(main_o).unwrap());
         linker.add_object("sub.o".to_string(), Elf::parse(sub_o).unwrap());
 
@@ -301,7 +257,7 @@ mod tests {
     fn resolve_symbols_returns_error_when_symbol_unresolved() {
         let main_o = include_bytes!("../parser/fixtures/main.o");
 
-        let mut linker = Linker::new();
+        let mut linker = Linker::default();
         linker.add_object("main.o".to_string(), Elf::parse(main_o).unwrap());
 
         // sub.oがないのでxが未解決
@@ -316,28 +272,31 @@ mod tests {
 
 ### シンボル解決の流れ
 
-`main.o`と`sub.o`のシンボルテーブルを例に、シンボル解決の流れを説明する。
+`main.o`と`sub.o`を例に、解決処理が何をしているかを順を追って見ていく。
 
-**main.oのシンボル**:
+main.oのシンボル：
+
 - `_start`: GLOBAL, 定義済み（.textセクション）
 - `x`: GLOBAL, 未定義（UND）
 
-**sub.oのシンボル**:
+sub.oのシンボル：
+
 - `x`: GLOBAL, 定義済み（.dataセクション）
 
-シンボル解決の処理:
+これらを順に処理すると次のようになる。
 
 1. `main.o`の`_start`を追加（定義済み）
 2. `main.o`の`x`を追加（未定義）
 3. `sub.o`の`x`を処理
    - 既存の`x`は未定義、新しい`x`は定義済み
-   - 定義済みの方で上書き → **解決成功**
+   - 定義済みの方で上書きする → 解決成功
 
-最終的に:
-- `_start`: `main.o`で定義
-- `x`: `sub.o`で定義
+最終的に`_start`は`main.o`、`x`は`sub.o`で定義されている、という結果になる。
 
 ### resolve_symbolsを実装する
+
+各オブジェクトのシンボルを順に見ていき、`HashMap`に詰めていく。
+ぶつかったときは「既存と新規がそれぞれ定義済みか未定義か」「強さはどうか」で振り分ける、というのが基本的な流れである。
 
 ```diff:src/linker/symbol.rs
  use std::collections::HashMap;
@@ -445,10 +404,11 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 ## まとめ
 
 本章ではシンボル解決を実装した。
+シンプルなロジックだが、実際のリンカーの中核を担う処理であることを実感できたと思う。
 
-- シンボルの強さは `Local > Global` の順
+- シンボルの強さは`Local > Global`の順で判定する
 - 未定義シンボルは定義済みシンボルで上書きされる
-- 同じ強さの定義済みシンボルが重複するとエラー
-- 解決されないシンボルが残るとエラー
+- 同じ強さの定義済みシンボルが重複するとエラーにする
+- 解決されないシンボルが残っていてもエラーにする
 
-次章では、セクション配置の実装を行う。
+次章では、結合したセクションをメモリ上に配置していくセクション配置を実装していく。

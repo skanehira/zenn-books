@@ -2,7 +2,8 @@
 title: "ELFパーサーの実装（3）再配置情報"
 ---
 
-本章では、再配置情報のパースを実装し、ELFパーサーを完成させる。
+本章では再配置情報のパースを実装し、ELFパーサーを完成させる。
+最後に、ヘッダー・セクション・シンボル・再配置の4つを束ねる`Elf`構造体も用意して、外から`Elf::parse`一発で呼び出せるようにする。
 
 ## 本章で実装するファイル
 
@@ -51,7 +52,7 @@ $ touch src/elf/relocation.rs src/parser/relocation.rs
 
 ## テスト用フィクスチャの追加
 
-再配置情報のテストには`main.o`が必要なので、フィクスチャに追加する。
+再配置情報のテストには再配置を持つファイルが必要なので、`main.o`をフィクスチャに追加しておく。
 
 ```sh
 $ gcc -c main.c -o src/parser/fixtures/main.o
@@ -62,6 +63,7 @@ $ gcc -c main.c -o src/parser/fixtures/main.o
 ### データ構造を定義する
 
 `src/elf/relocation.rs`を実装する。
+`r_info`は1つの値の中にシンボルインデックスと再配置タイプが詰まっているので、こちらもバラして`Info`構造体に持たせる。
 
 ```rust:src/elf/relocation.rs
 #[derive(Default, Debug, PartialEq, Eq, Clone, Copy)]
@@ -101,6 +103,7 @@ pub struct Rela {
 ### テストを書く
 
 `src/parser/relocation.rs`にテストを書く。
+`main.o`には変数`x`を参照する再配置エントリが1つあるはずなので、それが取れることを確認する。
 
 ```rust:src/parser/relocation.rs
 #[cfg(test)]
@@ -133,6 +136,9 @@ mod tests {
 ```
 
 ### パース処理を実装する
+
+`.rela.text`セクションを探して、`size / entsize`の数だけ再配置エントリを読み取る。
+`r_info`は下位32ビットが再配置タイプ、上位32ビットがシンボルインデックスである。
 
 ```diff:src/parser/relocation.rs
 +use super::ParseResult;
@@ -224,9 +230,11 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 ## ELFパーサーの統合
 
-すべてのパース処理を統合し、ELF全体を表す構造体を定義する。
+ここまでで部品はそろったので、最後にELF全体を表す`Elf`構造体を用意して、各パーサーを順番に呼ぶだけの`parse`関数を実装する。
 
 ### テストを書く
+
+`main.o`を入れて、ヘッダー・シンボル・再配置がまとめて取れることを確認する。
 
 ```diff:src/parser.rs
  pub type ParseResult<'a, T> = nom::IResult<&'a [u8], T, ParseError>;
@@ -255,6 +263,9 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 ```
 
 ### ELF構造体を実装する
+
+各パーサーを順番に呼んで結果を1つの構造体に詰めるだけ。
+`nom::Err`から`ParseError`への変換は毎回同じパターンになるので、思い切ってシンプルに書いている。
 
 ```diff:src/parser.rs
  use error::ParseError;
@@ -336,9 +347,6 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 ## まとめ
 
-本章ではELFパーサーを完成させた。
-
-- 再配置エントリの`info`は上位32ビットがシンボルインデックス、下位32ビットが再配置タイプ
-- `Elf`構造体でパース結果を統合
-
-これでオブジェクトファイルの読み込みができるようになった。次章では、リンク処理の仕組みを解説する。
+本章で再配置情報のパースを実装し、ELFパーサーが完成した。
+これでオブジェクトファイルを読み込んで構造体として扱える状態になった。
+ここからがリンカー本体の実装である。次章では、リンク処理が全体としてどんな流れで動くのかをざっくり整理する。
