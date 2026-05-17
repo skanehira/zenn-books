@@ -80,6 +80,10 @@ $ echo $?
 
 本書の原稿はこちらの[リポジトリ](https://github.com/skanehira/zenn-books)にあるので、分かりづらい部分や変な日本語があったらぜひPRを出してほしい。
 
+また、感想や質問などはこちらへ
+
+https://zenn.dev/skanehira/scraps/ba71c842335249
+
 ## 筆者について
 
 ゴリラ
