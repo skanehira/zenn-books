@@ -196,10 +196,18 @@ test elf::header::tests::header_to_bytes_returns_64_bytes ... ok
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 
+## 出力ファイルの構造
+
+実装に入る前に、最終的にでき上がるELFファイルのレイアウトと書き出し順序を整理しておく。図1のとおりとなる。
+
+![](/images/writing-a-tiny-linker-in-rust/ch11-01-final-elf-layout.png)
+*図1*
+
+書き出す順番は左から ELFヘッダー → プログラムヘッダー → 各セクションデータ → セクションヘッダーテーブル である。これからの実装はこの順序をそのままRustコードに落としていく作業になる。
+
 ## ELF出力の実装
 
 部品がそろったので、いよいよELFファイル全体を書き出す処理を実装する。
-書き出す順番はELFヘッダー → プログラムヘッダー → セクションデータ → セクションヘッダーで、ファイル内のオフセットとアドレスを意識しながら順に流し込んでいく。
 
 ### テストを書く
 
@@ -266,7 +274,25 @@ mod tests {
 
 ### ELF出力を実装する
 
-実装は次のとおり。
+実装は3つのステップに分けて積み上げていく。
+
+1. `write_executable`：図1の書き出し順序をそのままなぞる本体
+2. ヘッダー生成ヘルパー（`create_elf_header` / `create_program_headers`）：ELFヘッダーとプログラムヘッダーの Rust 構造体を組み立てるだけの純粋関数
+3. バイト書き出しヘルパー（`write_program_headers` / `write_sections` / `write_section_header`）：組み立てた構造体を実際にリトルエンディアンで writer に流し込む
+
+なお先頭の `use` 行・依存追加・`writer.rs` の前提となる import 群は Step 1 の diff にまとめて入れている。テストが通るのはすべてのステップが揃った時点である点に注意してほしい。
+
+#### Step 1: write_executable で全体を束ねる
+
+エントリポイント（`_start`）を引き、図1のとおり「ELFヘッダー → プログラムヘッダー → セクションデータ → セクションヘッダーテーブル」の順で writer に流し込む本体。
+ヘッダーテーブルの書き出しに先立って `seek(SeekFrom::Start(elf_header.shoff))` でカーソルを移動しているのは、ファイル末尾の `e_shoff` 位置にちょうど書き始めるためである。
+
+なお `.symtab` のセクションヘッダーだけは、他のセクションと違って `sh_link` と `sh_info` に意味のある値を入れる必要がある。
+
+- `sh_link`：シンボル名を引くための文字列テーブル `.strtab` のセクションインデックス
+- `sh_info`：ローカルシンボルとグローバルシンボルの境界となるインデックス。`.symtab` の中はローカルシンボルが先、グローバルが後ろに並んでいて、最初のグローバルシンボルのインデックスをここに書く（コードでは「ローカルシンボル数 + 1」を入れているが、この `+1` は先頭にある NULL シンボルの分である）
+
+ELF を読み込む側はこの2つの値を頼りに `.symtab` を解釈するため、ここを正しくセットしないと `readelf` などのツールで正しく表示されなくなる。
 
 ```diff:src/linker/writer.rs
  use std::collections::HashMap;
@@ -369,7 +395,19 @@ mod tests {
 +
 +        Ok(())
 +    }
-+
+ }
+```
+
+#### Step 2: ヘッダー生成ヘルパー
+
+`create_elf_header` は ELF ヘッダーの Rust 構造体を組み立てるだけ。`shoff`（セクションヘッダーテーブルの開始位置）は「最も末尾にあるセクションの終端」から算出している。
+
+`shnum` と `shstrndx` の計算で `+1` しているのは、ELF の規約でセクションヘッダーテーブルの先頭（インデックス0）に **NULLセクションヘッダー**（中身がすべて0のダミー）を必ず置く必要があるためで、`section_tables` に入っている実セクション数 + そのNULLぶん、という意味になる。
+
+`create_program_headers` は `.text` セグメント（読み取り + 実行）と `.data` セグメント（読み取り + 書き込み）の2本を作る。ファイルへの書き込みは別関数（Step 3 の `write_program_headers`）に切り分けてある。
+
+```diff:src/linker/writer.rs
+ impl Linker {
 +    fn create_elf_header(
 +        &self,
 +        entry: u64,
@@ -450,7 +488,16 @@ mod tests {
 +
 +        program_headers
 +    }
-+
+ }
+```
+
+#### Step 3: バイト書き出しヘルパー
+
+ここまでで作った Rust 構造体を、実際にリトルエンディアンで writer に流し込む。
+`write_sections` だけは `seek(SeekFrom::Start(section.offset))` で各セクションの正しいファイル内オフセットへカーソルを動かしてから書き込んでいる点に注意。`.text` と `.data` の間にあるファイル上のギャップは、この `seek` で自動的にスキップされる。
+
+```diff:src/linker/writer.rs
+ impl Linker {
 +    fn write_program_headers<W: Write>(
 +        &self,
 +        writer: &mut W,
@@ -523,7 +570,7 @@ mod tests {
 +
 +        writer.write_all(&bytes)?;
 +        Ok(())
-     }
++    }
  }
 ```
 
@@ -535,33 +582,6 @@ running 1 test
 test linker::writer::tests::write_executable_writes_valid_elf_header ... ok
 
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
-```
-
-## 出力ファイルの構造
-
-最終的にでき上がるELFファイルのレイアウトは次のようになる。
-
-```
-ファイルオフセット
-┌─────────────────┬──────────────┐
-│ 0x0000          │ ELF Header   │  64バイト
-├─────────────────┼──────────────┤
-│ 0x0040          │ Program      │  56バイト × 2
-│                 │ Header       │
-├─────────────────┼──────────────┤
-│ 0x0100          │ .text        │  コードデータ
-├─────────────────┼──────────────┤
-│ 0x0110          │ .data        │  データ
-├─────────────────┼──────────────┤
-│ 0x0114          │ .strtab      │  シンボル名の文字列テーブル
-├─────────────────┼──────────────┤
-│ 0x0138          │ .symtab      │  シンボルテーブル
-├─────────────────┼──────────────┤
-│ 0x01b0          │ .shstrtab    │  セクション名の文字列テーブル
-├─────────────────┼──────────────┤
-│ 0x01d8          │ Section      │  64バイト × 6
-│                 │ Header       │
-└─────────────────┴──────────────┘
 ```
 
 ## まとめ

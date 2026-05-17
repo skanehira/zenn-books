@@ -122,10 +122,14 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
 ## セクション配置の実装
 
-ここからが本題のセクション配置である。
-やることは大きく3つで、各オブジェクトの`.text`/`.data`をマージし、メモリアドレスを割り当て、シンボルのアドレスを更新していく。
+ここからが本章の本題である。本書のスタイルに従って、まずテストを書き、次に実装の意図を図と式で整理し、最後にコードを積み上げていく流れで進める。
 
 ### テストを書く
+
+ここでは「最終的にどんなアドレスに配置されているか」を検証するテストを先に書く。
+期待値の `0x400100` や `0x10000` のギャップといった具体的な数値の根拠は、テスト記述のあとの「セクション配置を実装する」節で図と式を交えて説明するので、ここでは「あとで腑に落ちる」前提で読み進めてほしい。
+
+なお、ここで導入する定数 `BASE_ADDR` は、07章で説明した実行ファイルのベースアドレス `0x400000` をモジュール定数として置いたものである。
 
 ```diff:src/linker/section.rs
 +use std::borrow::Cow;
@@ -137,7 +141,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 +use super::output::{ResolvedSymbol, Section};
 +use super::Linker;
 +
-+/// 実行ファイルのベースアドレス
++/// 実行ファイルのベースアドレス（07章で説明したAArch64 Linuxの慣習値）
 +pub static BASE_ADDR: u64 = 0x400000;
 +
  /// 値を指定した2のべき乗の境界に揃える
@@ -210,7 +214,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
 ### セクション配置を実装する
 
-少し長くなるが、やっていることは「マージ」「アドレス割り当て」「シンボル更新」「シンボルテーブルと文字列テーブルの作成」を順番にやっているだけである。
+ここからが本題のセクション配置である。実装は長めになるので、まず「マージ後オフセット」というデータ構造と、シンボルアドレスを決める計算式を先に押さえてから、コードを4ステップに分けて積み上げていく。
 
 #### マージ後オフセットの記録
 
@@ -218,13 +222,10 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 **「元の (オブジェクト, セクション) がマージ後の何バイト目に置かれたか」** を覚えておく必要がある。
 そうしないと、シンボルが「もとのセクション内オフセット」しか持っていないので、マージ後の絶対アドレスに変換できない。
 
-たとえば次のような状況を考える。
+たとえば図1のような状況を考える。
 
-```
-main.o の .text (16バイト) ─┐
-                           ├─ マージ後の .text (20バイト)
-sub.o  の .text  (4バイト) ─┘
-```
+![](/images/writing-a-tiny-linker-in-rust/ch09-01-section-merge.png)
+*図1*
 
 このとき:
 
@@ -239,76 +240,51 @@ sub.o  の .text  (4バイト) ─┘
 let mut text_offsets: HashMap<(usize, u16), usize> = HashMap::new();
 ```
 
-シンボルの最終アドレスは、この情報を使って次のように決まる。
-
-```
-シンボルの最終アドレス
-  = .text セクションのベースアドレス
-  + マージ後の (オブジェクト, セクション) オフセット
-  + シンボルが持っていた元のセクション内オフセット
-```
-
-たとえば`sub.o`の`.text`内オフセット2にあるシンボルなら、
-`0x400100`（`.text`のaddr）`+ 16`（`sub.o`の`.text`マージ後オフセット）`+ 2`（元オフセット）`= 0x400112`
-が最終アドレスになる。
-
 `.data`についても同じ仕組みで`data_offsets`を作る。
+
+#### シンボルアドレス更新の仕組み
+
+マージ後オフセットが揃ったら、最後にシンボルが指すアドレスを元のオブジェクトファイル内のオフセットから最終的なメモリアドレスに置き換える。
+最終アドレスは図2のように、3つの値の足し算で求められる。
+
+![](/images/writing-a-tiny-linker-in-rust/ch09-02-symbol-address-calculation.png)
+*図2*
+
+具体例で見ると次のとおり。`sub.o`の変数`x`は、もともと`.data`セクションのオフセット0にあるので、
+
+```
+x のアドレス = .dataセクションのアドレス + sub.oの.dataオフセット + 元のオフセット
+            = 0x410110 + 0 + 0
+            = 0x410110
+```
+
+`main.o`の`_start`は`.text`セクションのオフセット0にあるので、
+
+```
+_start のアドレス = .textセクションのアドレス + main.oの.textオフセット + 元のオフセット
+                 = 0x400100 + 0 + 0
+                 = 0x400100
+```
+
+となる。これから実装する`merge_sections`は、まさにこの式を実装するのが目的である。
+
+#### 実装ステップ
+
+`layout_sections`本体に加えて、補助関数を3つ用意する都合で実装はやや長くなる。
+そのため本書では、次の4ステップに分けてコードを積み上げていく。テストが通るのはすべてのステップが揃った時点である点に注意してほしい。
+
+1. `merge_sections`：`.text`と`.data`をマージし、シンボルアドレスを更新する
+2. `make_symbol_section`と`write_symbol_entry`：シンボルテーブルと文字列テーブルを作る
+3. `layout_sections`：上記2つの helper を呼んで全体を束ねる
+4. `apply_relocations`のスタブ：次章で実装するための空関数
+
+#### Step 1: merge_sections
+
+`merge_sections` は各オブジェクトファイルの `.text` と `.data` をそれぞれ1本にマージし、その流れでシンボルのアドレスも更新する。後半の `for symbol in resolved_symbols.values_mut()` のループが、前節（図2）で示した「ベースアドレス + マージ後オフセット + 元のオフセット」の足し算をそのまま実装している部分である。
+末尾で `self.apply_relocations(...)` を呼んでいるが、その本体は次章で書く。本章では Step 4 で空のスタブだけ用意するので、ここでは「呼び出す側がある」程度に思って読み進めてほしい。
 
 ```diff:src/linker/section.rs
  impl Linker {
-     pub fn layout_sections(
-         &self,
--        _resolved_symbols: &mut HashMap<String, ResolvedSymbol>,
-+        resolved_symbols: &mut HashMap<String, ResolvedSymbol>,
-     ) -> Result<(Vec<Section<'static>>, HashMap<String, usize>)> {
--        todo!()
-+        // セクションのマージ
-+        let output_sections = self.merge_sections(resolved_symbols, BASE_ADDR)?;
-+
-+        // シンボルテーブルと文字列テーブルの作成
-+        let latest_offset =
-+            output_sections.last().unwrap().offset + output_sections.last().unwrap().size;
-+        let (symtab_section, strtab_section) =
-+            self.make_symbol_section(latest_offset, resolved_symbols);
-+
-+        // セクションヘッダー文字列テーブルの作成
-+        let mut shstrtab: Vec<u8> = vec![0]; // NULL文字から始める
-+        let mut section_name_offsets: HashMap<String, usize> = HashMap::new();
-+
-+        // 各セクション名を追加
-+        for section in output_sections.iter() {
-+            section_name_offsets.insert(section.name.to_string(), shstrtab.len());
-+            shstrtab.extend_from_slice(section.name.as_bytes());
-+            shstrtab.push(0);
-+        }
-+
-+        // .strtab, .symtab, .shstrtab の名前を追加
-+        for name in [".strtab", ".symtab", ".shstrtab"] {
-+            section_name_offsets.insert(name.to_string(), shstrtab.len());
-+            shstrtab.extend_from_slice(name.as_bytes());
-+            shstrtab.push(0);
-+        }
-+
-+        let shstrtab_section = Section {
-+            name: Cow::Borrowed(".shstrtab"),
-+            r#type: SectionType::StrTab,
-+            flags: vec![],
-+            addr: 0,
-+            offset: align(symtab_section.offset + symtab_section.size, 8),
-+            size: shstrtab.len() as u64,
-+            data: Cow::Owned(shstrtab),
-+            align: 1,
-+        };
-+
-+        // すべてのセクションを結合
-+        let mut all_sections = output_sections;
-+        all_sections.push(strtab_section);
-+        all_sections.push(symtab_section);
-+        all_sections.push(shstrtab_section);
-+
-+        Ok((all_sections, section_name_offsets))
-+    }
-+
 +    fn merge_sections(
 +        &self,
 +        resolved_symbols: &mut HashMap<String, ResolvedSymbol>,
@@ -378,7 +354,7 @@ let mut text_offsets: HashMap<(usize, u16), usize> = HashMap::new();
 +            align: 4,
 +        };
 +
-+        // シンボルのアドレスを更新
++        // シンボルのアドレスを更新（図2の式そのもの）
 +        for symbol in resolved_symbols.values_mut() {
 +            if let Some(&offset) = text_offsets.get(&(symbol.object_index, symbol.section_index)) {
 +                symbol.value = text_section.addr + (offset as u64) + symbol.value;
@@ -389,12 +365,21 @@ let mut text_offsets: HashMap<(usize, u16), usize> = HashMap::new();
 +
 +        let mut output_sections = vec![text_section, data_section];
 +
-+        // 再配置を適用（次章で実装）
++        // 再配置を適用（中身は次章で実装、今は Step 4 のスタブが呼ばれる）
 +        self.apply_relocations(&mut output_sections, resolved_symbols)?;
 +
 +        Ok(output_sections)
 +    }
-+
+ }
+```
+
+#### Step 2: make_symbol_section / write_symbol_entry
+
+シンボルテーブル `.symtab` と、その中で参照される文字列テーブル `.strtab` を作る。ELFの規約で `.symtab` の中はローカルシンボルが先に並んでいる必要があるので、ローカル → グローバルの順で2回ループしている。
+`write_symbol_entry` は1シンボルぶん（24バイト）を書き出すヘルパーで、03章で見た `st_info` の「上位4ビット = バインディング / 下位4ビット = タイプ」のビット詰め込みを、ここで逆方向に組み立てている。
+
+```diff:src/linker/section.rs
+ impl Linker {
 +    /// シンボルテーブルと文字列テーブルを作成
 +    fn make_symbol_section(
 +        &self,
@@ -466,7 +451,7 @@ let mut text_offsets: HashMap<(usize, u16), usize> = HashMap::new();
 +            data: Cow::Owned(symtab),
 +            align: 8,
 +        };
-
++
 +        (symtab_section, strtab_section)
 +    }
 +
@@ -513,15 +498,6 @@ let mut text_offsets: HashMap<(usize, u16), usize> = HashMap::new();
 +        // st_size (8バイト)
 +        symtab.extend_from_slice(&symbol.size.to_le_bytes());
 +    }
-+
-+    // 次章で実装
-+    pub fn apply_relocations(
-+        &self,
-+        _sections: &mut [Section<'static>],
-+        _resolved_symbols: &HashMap<String, ResolvedSymbol>,
-+    ) -> Result<()> {
-+        Ok(())
-     }
  }
 ```
 
@@ -529,6 +505,87 @@ let mut text_offsets: HashMap<(usize, u16), usize> = HashMap::new();
 セクションインデックスを`symbol.value >= 0x410000`で判定しているのは簡略化のためで、複数の`.text`セクションや`.rodata`などを追加した瞬間に破綻する。
 本格的には`ResolvedSymbol`側に出力セクションのインデックスを持たせ、`merge_sections`の中で確定値を書き戻す方式に拡張するのが本筋である。
 :::
+
+#### Step 3: layout_sections で全体を束ねる
+
+ここまでで作った2つの helper を呼んで、最後にセクション名の文字列テーブル `.shstrtab` を組み立てる。
+`.shstrtab` は「セクション名そのもの」を格納するNULL終端文字列の連続で、各セクションのヘッダーの `sh_name` フィールドが、この中のオフセットを指す。
+
+セクションを並べるときの順序にも意図がある。最後に `.strtab` → `.symtab` → `.shstrtab` の順で push しているのは、`.symtab` のセクションヘッダーが持つ `sh_link` フィールドで `.strtab` のインデックスを指す必要があるためで、`.strtab` のほうが若いインデックスになるよう先に置いている（具体的な書き出しは11章）。
+
+```diff:src/linker/section.rs
+ impl Linker {
+     pub fn layout_sections(
+         &self,
+-        _resolved_symbols: &mut HashMap<String, ResolvedSymbol>,
++        resolved_symbols: &mut HashMap<String, ResolvedSymbol>,
+     ) -> Result<(Vec<Section<'static>>, HashMap<String, usize>)> {
+-        todo!()
++        // セクションのマージ（Step 1）
++        let output_sections = self.merge_sections(resolved_symbols, BASE_ADDR)?;
++
++        // シンボルテーブルと文字列テーブルの作成（Step 2）
++        let latest_offset =
++            output_sections.last().unwrap().offset + output_sections.last().unwrap().size;
++        let (symtab_section, strtab_section) =
++            self.make_symbol_section(latest_offset, resolved_symbols);
++
++        // セクションヘッダー文字列テーブルの作成
++        let mut shstrtab: Vec<u8> = vec![0]; // NULL文字から始める
++        let mut section_name_offsets: HashMap<String, usize> = HashMap::new();
++
++        // 各セクション名を追加
++        for section in output_sections.iter() {
++            section_name_offsets.insert(section.name.to_string(), shstrtab.len());
++            shstrtab.extend_from_slice(section.name.as_bytes());
++            shstrtab.push(0);
++        }
++
++        // .strtab, .symtab, .shstrtab の名前を追加
++        for name in [".strtab", ".symtab", ".shstrtab"] {
++            section_name_offsets.insert(name.to_string(), shstrtab.len());
++            shstrtab.extend_from_slice(name.as_bytes());
++            shstrtab.push(0);
++        }
++
++        let shstrtab_section = Section {
++            name: Cow::Borrowed(".shstrtab"),
++            r#type: SectionType::StrTab,
++            flags: vec![],
++            addr: 0,
++            offset: align(symtab_section.offset + symtab_section.size, 8),
++            size: shstrtab.len() as u64,
++            data: Cow::Owned(shstrtab),
++            align: 1,
++        };
++
++        // すべてのセクションを結合
++        let mut all_sections = output_sections;
++        all_sections.push(strtab_section);
++        all_sections.push(symtab_section);
++        all_sections.push(shstrtab_section);
++
++        Ok((all_sections, section_name_offsets))
++    }
+ }
+```
+
+#### Step 4: apply_relocations のスタブ
+
+再配置の本実装は次章で行うため、ここではコンパイルを通すための空関数だけ用意する。これで Step 1 の `merge_sections` から呼ばれても、何もせずにそのまま `Ok(())` を返すだけになる。
+
+```diff:src/linker/section.rs
+ impl Linker {
++    // 次章で実装
++    pub fn apply_relocations(
++        &self,
++        _sections: &mut [Section<'static>],
++        _resolved_symbols: &HashMap<String, ResolvedSymbol>,
++    ) -> Result<()> {
++        Ok(())
++    }
+ }
+```
 
 ### テストを実行する
 
@@ -539,28 +596,6 @@ test linker::section::tests::layout_sections_returns_sections_with_correct_addre
 
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
-
-## シンボルアドレス更新の仕組み
-
-セクションをマージしたあと、シンボルが指すアドレスは元のオブジェクトファイル内のオフセットから、最終的なメモリアドレスに変える必要がある。
-
-たとえば`sub.o`の変数`x`は、もともと`.data`セクションのオフセット0にある。マージ後のアドレスは次のように計算する。
-
-```
-x のアドレス = .dataセクションのアドレス + sub.oの.dataオフセット + 元のオフセット
-            = 0x410110 + 0 + 0
-            = 0x410110
-```
-
-`main.o`の`_start`は`.text`セクションのオフセット0にあるので、
-
-```
-_start のアドレス = .textセクションのアドレス + main.oの.textオフセット + 元のオフセット
-                 = 0x400100 + 0 + 0
-                 = 0x400100
-```
-
-となる。`text_offsets`や`data_offsets`に「マージ後のオフセット」を記録しておいたのは、ここで使うためである。
 
 ## まとめ
 

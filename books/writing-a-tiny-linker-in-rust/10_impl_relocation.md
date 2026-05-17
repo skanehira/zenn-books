@@ -75,34 +75,19 @@ adr x0, x    ; 変数xのアドレスをx0にロード
 PCは「現在CPUが実行している命令のメモリアドレス」を保持するレジスタである。
 ADR命令を実行する瞬間、PCはそのADR命令自身が置かれているアドレスを指している。
 したがって「PC相対アドレス」とは、その命令自身の位置を基準にした相対位置のことをいう。
+本書のサンプルで`adr x0, x`を実行する場面の様子を図にすると、図1のとおりとなる。
 
-```
-メモリ
-┌──────────────────────────────┐
-│ ...                          │
-├──────────────────────────────┤
-│ 0x400100: adr x0, x  ← この命令を実行中なら PC = 0x400100
-├──────────────────────────────┤
-│ 0x400104: ldr w0, [x0]       │
-├──────────────────────────────┤
-│ ...                          │
-├──────────────────────────────┤
-│ 0x410110: x = 11             │
-└──────────────────────────────┘
-```
+![](/images/writing-a-tiny-linker-in-rust/ch10-02-pc-and-instruction.png)
+*図1*
 
 ADR命令にはこの「PCからの差分」が即値として埋め込まれていて、CPUは実行時に `PC + 即値` を計算してレジスタに入れる。
 
 ### ADR命令のビットフィールド
 
-ADR命令は32ビット長で、ビットの内訳は次のようになっている。
+ADR命令は32ビット長で、ビットの内訳は図2のとおりとなっている。
 
-```
- 31 30 29 28 27 26 25 24 23                    5 4     0
-┌──┬─────┬─────────────────────────────────────┬────────┐
-│op│immlo│ 1  0  0  0  0 │       immhi         │   Rd   │
-└──┴─────┴─────────────────────────────────────┴────────┘
-```
+![](/images/writing-a-tiny-linker-in-rust/ch10-01-adr-instruction-bits.png)
+*図2*
 
 - op (1ビット): オペコード（ADR=0, ADRP=1）
 - immlo (2ビット): 即値の下位2ビット（ビット29-30）
@@ -134,8 +119,8 @@ PCは本来CPU内部の値だが、リンカーは`.text`セクションをど�
 
 ## 再配置の計算例
 
-実装に入る前に、ここまでで出てきた式を実際の値で一度回しておく。
-これからRustで書く処理が何を計算しているのかが具体的にイメージできるようになる。
+実装に入る前に、ここまでで出てきた式を実際の値で説明する。
+そうすれば、これからRustで書く処理が何を計算しているのかが具体的にイメージできるようになる。
 
 前提条件：
 
@@ -143,43 +128,17 @@ PCは本来CPU内部の値だが、リンカーは`.text`セクションをど�
 - `x`（シンボルのアドレス）: `0x410110`
 - `addend`: `0`
 
-相対アドレスの計算：
+全体の流れは図3のとおりで、4ステップで `0x10080080` という最終命令にたどり着く。
 
-```
-relative_addr = symbol_addr - instruction_addr + addend
-              = 0x410110 - 0x400100 + 0
-              = 0x10010
-```
-
-即値のエンコード：
-
-```
-relative_addr = 0x10010 = 0b0001_0000_0000_0001_0000
-
-immlo = (0x10010 & 0x3) << 29
-      = 0 << 29
-      = 0
-
-immhi = ((0x10010 >> 2) & 0x7FFFF) << 5
-      = (0x4004 & 0x7FFFF) << 5
-      = 0x4004 << 5
-      = 0x80080
-```
-
-新しい命令：
-
-```
-opcode_rd     = 0x10000000  (ADR x0)
-immlo         = 0x00000000
-immhi         = 0x00080080
-new_instruction = opcode_rd | immlo | immhi
-                = 0x10080080
-```
+![](/images/writing-a-tiny-linker-in-rust/ch10-03-relocation-calculation.png)
+*図3*
 
 これでADR命令が正しくエンコードされ、実行時に`x0`レジスタに`x`のアドレスがロードされる。
 次節からは、この計算をそのままRustに落としていく。
 
 ## エラー型の追加
+
+再配置処理では「シンボルが解決できない」「再配置オフセットが範囲外」「`.text` セクションが見つからない」といったエラーが発生し得るため、`LinkerError` に2種類のバリアントを追加しておく。実際に使うのは次節の `process_relocation` の中である。
 
 ```diff:src/error.rs
      #[error("IO error: {0}")]
@@ -242,11 +201,12 @@ mod tests {
 
 ### 再配置処理を実装する
 
-各オブジェクトの再配置エントリを順に処理し、種類ごとに分岐する形で書いていく。
-今回扱うのは1種類だけなので分岐はほぼないが、構造としては「将来別のタイプを足しやすい形」にしてある。
+実装は2つの関数に分けて書く。
+全オブジェクトの再配置エントリをループする **オーケストレーション部分**（`apply_relocations`）と、1エントリぶんの **メインロジック**（`process_relocation`）である。後者は前節「再配置の計算例」で見た図3の Step 1〜4 を、そのままRustに落とした形になっている。
 
-実装の中で `let opcode_rd = instruction & 0x9F00001F;` というマスクが出てくるが、
-これは ADR 命令の中で **「即値以外の部分」を残すためのマスク** である。
+#### Step 1: apply_relocations
+
+各オブジェクトの再配置エントリを順に走査し、1エントリずつ `process_relocation` に委譲するだけの関数。再配置タイプによる分岐は `process_relocation` 側で行うので、ここはタイプ非依存である。
 
 ```diff:src/linker/relocation.rs
 +use std::collections::HashMap;
@@ -285,7 +245,21 @@ mod tests {
 +
 +        Ok(())
 +    }
-+
++}
+```
+
+#### Step 2: process_relocation
+
+ここが再配置の本体である。`match` で再配置タイプごとに分岐し、`R_AARCH64_ADR_PREL_LO21` の場合の処理を書く。今回扱うのは1種類だけなので分岐はほぼないが、構造としては「将来別のタイプを足しやすい形」にしてある。
+
+中身は図3の Step 1〜4 にそのまま対応している：
+1. 参照先シンボルとターゲットセクションを引く（前半のエラーチェックを含む）
+2. 命令アドレス・シンボルアドレス・addend から **相対アドレス**を計算
+3. 相対アドレスを `immlo`（下位2bit）と `immhi`（上位19bit）に分解
+4. 元の命令の即値以外を残し（`& 0x9F00001F` がそのマスク）、`immlo` / `immhi` をORして新しい命令を書き戻す
+
+```diff:src/linker/relocation.rs
+ impl Linker {
 +    fn process_relocation(
 +        &self,
 +        obj_idx: usize,
@@ -296,6 +270,7 @@ mod tests {
 +    ) -> Result<()> {
 +        match reloc.info.r#type {
 +            RelocationType::Aarch64AdrPrelLo21 => {
++                // --- 図3 Step 1: 前提値の取得 ---
 +                // シンボルインデックスを取得
 +                let symbol_index = reloc.info.symbol_index as usize;
 +                if symbol_index >= self.objects[obj_idx].symbols.len() {
@@ -330,35 +305,26 @@ mod tests {
 +                    });
 +                }
 +
-+                // アドレスを計算
++                // --- 図3 Step 2: 相対アドレスを計算 ---
 +                let instruction_addr = target_section.addr + reloc.offset;
 +                let symbol_addr = resolved_symbol.value;
-+
-+                // 相対アドレスを計算
-+                // relative_addr = シンボルアドレス - 命令アドレス + addend
 +                let relative_addr =
 +                    ((symbol_addr as i64) - (instruction_addr as i64) + reloc.addend) as i32;
 +
-+                // 命令を取得
++                // 既存の命令を読み出す
 +                let pos = reloc.offset as usize;
 +                let data = target_section.data.to_mut();
 +                let instruction =
 +                    u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
 +
-+                // オペコードとレジスタ部分を保持
-+                // ADR命令: ビット28-24が10000、ビット0-4がレジスタ
++                // --- 図3 Step 3: immlo / immhi に分解 ---
++                // 元の命令から即値以外（オペコード+レジスタ）だけ残すマスク
 +                let opcode_rd = instruction & 0x9F00001F;
-+
-+                // 即値をエンコード
-+                // immlo: 下位2ビット → ビット29-30
 +                let immlo = ((relative_addr & 0x3) as u32) << 29;
-+                // immhi: 上位19ビット → ビット5-23
 +                let immhi = (((relative_addr >> 2) & 0x7FFFF) as u32) << 5;
 +
-+                // 新しい命令を組み立て
++                // --- 図3 Step 4: 新しい命令を組み立てて書き戻し ---
 +                let new_instruction = opcode_rd | immlo | immhi;
-+
-+                // 命令を書き換え
 +                data[pos..pos + 4].copy_from_slice(&new_instruction.to_le_bytes());
 +            }
 +            _ => {
@@ -371,9 +337,6 @@ mod tests {
 +        Ok(())
 +    }
 +}
-+
- #[cfg(test)]
- mod tests {
 ```
 
 ### section.rsのスタブを削除する
