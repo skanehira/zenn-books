@@ -249,15 +249,22 @@ $ readelf -s a.out
 Symbol table '.symtab' contains 5 entries:
    Num:    Value          Size Type    Bind   Vis      Ndx Name
      0: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT  UND
-     1: 0000000000410110     0 NOTYPE  LOCAL  DEFAULT    2 $d
-     2: 0000000000400100     0 NOTYPE  LOCAL  DEFAULT    1 $x
-     3: 0000000000400100     0 NOTYPE  GLOBAL DEFAULT    1 _start
-     4: 0000000000410110     4 OBJECT  GLOBAL DEFAULT    2 x
+     1: 0000000000400100     0 NOTYPE  LOCAL  DEFAULT    1 $x
+     2: 0000000000410110     0 NOTYPE  LOCAL  DEFAULT    2 $d
+     3: 0000000000410110     4 OBJECT  GLOBAL DEFAULT    2 x
+     4: 0000000000400100     0 NOTYPE  GLOBAL DEFAULT    1 _start
 ```
 
 エントリポイントもセクション配置もシンボルテーブルも、想定どおりの形になっている。
 
-補足: `$d`と`$x`は`gcc`がARM64向けに自動で付与する mapping symbol で、コードとデータの境界を示すために使われている。
+:::message
+**補足: `$d` と `$x` について**
+
+`$d` と `$x` は `gcc` が ARM64 向けにオブジェクトファイル（`main.o` / `sub.o`）へ自動で付与する **mapping symbol** で、コードとデータの境界を示すために使われる。
+
+本書のリンカーは09章の `make_symbol_section` で `resolved_symbols` に含まれる LOCAL シンボルもそのまま `.symtab` に書き出す実装になっているため、入力ファイルにあった `$d` / `$x` がそのまま `a.out` に引き継がれている。
+なお、LOCAL シンボルや `_start`／`x` の出ている順番は、内部の `HashMap` のイテレーション順に依存するため、手元での実行結果と上の表示が前後する場合がある（並び順自体は意味を持たない）。
+:::
 
 ## まとめ
 
